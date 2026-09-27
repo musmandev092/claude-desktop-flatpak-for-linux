@@ -1,0 +1,25 @@
+# ── Anthropic's app: NEVER commit (that would be redistribution) ──
+*.deb
+*.rpm
+*.AppImage
+*.asar
+claude-study/
+
+# ── Flatpak build output (big, generated, rebuildable) ──
+.flatpak-builder/
+build-dir/
+repo/
+*.flatpak
+
+# ── Secret keys: NEVER commit ──
+*.gpg
+*.key
+private*.asc
+secrets/
+
+# ── Editor and system junk ──
+.vscode/
+.cursor/
+.idea/
+*.swp
+.DS_Store
