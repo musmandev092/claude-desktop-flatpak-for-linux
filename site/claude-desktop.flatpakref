@@ -1,0 +1,11 @@
+[Flatpak Ref]
+Name=io.github.musmandev092.ClaudeDesktop
+Branch=master
+Title=Desktop client for Claude (unofficial)
+Url=@URL@/repo/
+SuggestRemoteName=claude-desktop
+RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+IsRuntime=false
+Homepage=https://github.com/musmandev092/claude-desktop-flatpak-for-linux
+Icon=@URL@/icon.svg
+GPGKey=@GPGKEY@

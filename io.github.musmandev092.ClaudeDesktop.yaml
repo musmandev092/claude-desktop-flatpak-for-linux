@@ -14,8 +14,9 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
-  # GPU acceleration
-  - --device=dri
+  # All devices: GPU, plus /dev/kvm and /dev/vhost-vsock for the Cowork VM
+  # (there is no narrower permission for vhost-vsock)
+  - --device=all
   # Internet and sound
   - --share=network
   - --socket=pulseaudio
@@ -51,6 +52,81 @@ modules:
     cleanup:
       - /lib/debug
 
+  # ── Cowork VM stack ────────────────────────────────────────────────────────
+  # libcap-ng: needed by the virtiofsd that ships inside Claude's .deb
+  - name: libcap-ng
+    config-opts:
+      - --disable-static
+      - --without-python3
+    sources:
+      - type: archive
+        url: https://people.redhat.com/sgrubb/libcap-ng/libcap-ng-0.8.5.tar.gz
+        sha256: 3ba5294d1cbdfa98afaacfbc00b6af9ed2b83e8a21817185dfd844cc8c7ac6ff
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share
+
+  # libslirp: user-mode networking for the VM (no root needed)
+  - name: libslirp
+    buildsystem: meson
+    config-opts:
+      - --buildtype=release
+    sources:
+      - type: archive
+        url: https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.9.5/libslirp-v4.9.5.tar.gz
+        sha256: f43e68b60b580647574ec4a0e2b6c600a56281e6c39f79426510832dc810f483
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+
+  # QEMU: only the x86_64 system emulator, only what Cowork uses
+  # (KVM, q35, vhost-vsock, vhost-user-fs, virtio-net with slirp, memfd)
+  - name: qemu
+    buildsystem: simple
+    build-commands:
+      - >-
+        ./configure --prefix=${FLATPAK_DEST}
+        --target-list=x86_64-softmmu
+        --enable-kvm --enable-slirp
+        --enable-vhost-user --enable-vhost-kernel --enable-vhost-net
+        --disable-download --disable-werror --disable-debug-info
+        --disable-docs --disable-tools --disable-guest-agent --disable-user
+        --disable-gtk --disable-sdl --disable-vnc --disable-spice
+        --disable-opengl --disable-curses --disable-virglrenderer
+        --disable-libusb --disable-usb-redir --disable-smartcard
+        --disable-xen --audio-drv-list=
+      - make -j${FLATPAK_BUILDER_N_JOBS}
+      - make install
+    sources:
+      - type: archive
+        url: https://download.qemu.org/qemu-11.1.1.tar.xz
+        sha256: 079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482
+    cleanup:
+      - /include
+      - /share/applications
+      - /share/icons
+      - /libexec/qemu-bridge-helper
+
+  # OVMF: the VM's UEFI firmware, from Debian's prebuilt package (BSD licence).
+  # Installed at the same file names Claude expects, under /app/share/OVMF.
+  - name: ovmf
+    buildsystem: simple
+    build-commands:
+      - bsdtar -xOf ovmf.deb 'data.tar.*' | bsdtar -xf - ./usr/share/OVMF/OVMF_CODE_4M.fd ./usr/share/OVMF/OVMF_VARS_4M.fd
+      - install -Dm644 -t ${FLATPAK_DEST}/share/OVMF usr/share/OVMF/OVMF_CODE_4M.fd usr/share/OVMF/OVMF_VARS_4M.fd
+    sources:
+      - type: file
+        url: http://deb.debian.org/debian/pool/main/e/edk2/ovmf_2025.02-8+deb13u1_all.deb
+        sha256: 78e0d54df11fc77406cb7a0bc9a39e5bca6d1cbe06556b91d9a73491c52decdf
+        dest-filename: ovmf.deb
+        x-checker-data:
+          type: debian-repo
+          package-name: ovmf
+          root: http://deb.debian.org/debian
+          dist: trixie
+          component: main
+
   - name: claude-desktop
     buildsystem: simple
     build-commands:
@@ -58,6 +134,10 @@ modules:
       - install -Dm755 claude-desktop.sh ${FLATPAK_DEST}/bin/claude-desktop
       - install -Dm755 host-run ${FLATPAK_DEST}/bin/host-run
       - install -Dm755 host-bridge ${FLATPAK_DEST}/bin/host-bridge
+      - install -Dm755 cowork-patch ${FLATPAK_DEST}/bin/cowork-patch
+      # Cowork uses the virtiofsd that ships inside Claude's .deb
+      - install -d ${FLATPAK_DEST}/libexec
+      - ln -s /app/extra/claude-desktop/resources/virtiofsd ${FLATPAK_DEST}/libexec/virtiofsd
       - install -Dm644 ${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 ${FLATPAK_ID}.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm644 ${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
@@ -86,6 +166,8 @@ modules:
         path: scripts/host-run
       - type: file
         path: scripts/host-bridge
+      - type: file
+        path: scripts/cowork-patch
       - type: file
         path: io.github.musmandev092.ClaudeDesktop.desktop
       - type: file

@@ -1,0 +1,125 @@
+# Build, test and (on main) publish the Flatpak repository to GitHub Pages.
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub Release
+  pages: write      # deploy the Flatpak repo
+  id-token: write   # required by actions/deploy-pages
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_ID: io.github.musmandev092.ClaudeDesktop
+  MANIFEST: io.github.musmandev092.ClaudeDesktop.yaml
+  PAGES_URL: https://musmandev092.github.io/claude-desktop-flatpak-for-linux
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: ${{ env.MANIFEST }}
+          repo-dir: repo
+          build-bundle: false
+          upload-artifact: false
+          cache-key: flatpak-builder-${{ hashFiles(env.MANIFEST) }}
+
+      - name: Lint manifest and metainfo
+        run: |
+          flatpak-builder-lint manifest "$MANIFEST" || true   # report only: Flathub-only rules don't apply to us
+          appstreamcli validate --no-net "$APP_ID.metainfo.xml"
+
+      # Install exactly like a user would: this downloads Claude from Anthropic,
+      # checks the sha256 and runs apply_extra (including the Cowork patch).
+      - name: Smoke test install
+        run: |
+          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak --user remote-add --no-gpg-verify ci-local repo
+          flatpak --user install -y --noninteractive ci-local "$APP_ID"
+          extra="$(flatpak info --user --show-location "$APP_ID")/files/extra"
+          test -x "$extra/claude-desktop/claude-desktop"
+          test -x "$extra/claude-desktop-orig/claude-desktop"
+          echo "Claude version: $(cat "$extra/claude-version")"
+          echo "Cowork patch: $(cat "$extra/cowork-status")"
+
+      # Canary: if a new Claude version breaks the Cowork patch, fail here so
+      # the update PR is NOT auto-merged and users keep the working version.
+      - name: Cowork canary
+        run: |
+          extra="$(flatpak info --user --show-location "$APP_ID")/files/extra"
+          grep -qx enabled "$extra/cowork-status"
+          ! cmp -s "$extra/claude-desktop/resources/app.asar" "$extra/claude-desktop-orig/resources/app.asar"
+
+      - name: Sign repository
+        if: github.ref == 'refs/heads/main'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+        run: |
+          export GNUPGHOME="$(mktemp -d)"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          flatpak build-sign repo "$APP_ID" master --gpg-sign="$GPG_KEY_ID" --gpg-homedir="$GNUPGHOME"
+          flatpak build-update-repo repo --gpg-sign="$GPG_KEY_ID" --gpg-homedir="$GNUPGHOME" \
+            --title="Claude Desktop for Linux (unofficial)" --default-branch=master --prune
+          rm -rf "$GNUPGHOME"
+
+      - name: Assemble site
+        if: github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p _site
+          cp -r repo _site/repo
+          GPGKEY=$(gpg --dearmor < keys/flatpak-repo-public.asc | base64 --wrap=0)
+          sed -e "s|@GPGKEY@|$GPGKEY|" -e "s|@URL@|$PAGES_URL|g" site/claude-desktop.flatpakrepo > _site/claude-desktop.flatpakrepo
+          sed -e "s|@GPGKEY@|$GPGKEY|" -e "s|@URL@|$PAGES_URL|g" site/claude-desktop.flatpakref > _site/claude-desktop.flatpakref
+          sed -e "s|@VERSION@|$VERSION|g" -e "s|@URL@|$PAGES_URL|g" site/index.html > _site/index.html
+          sed -e "s|@URL@|$PAGES_URL|g" site/robots.txt > _site/robots.txt
+          sed -e "s|@URL@|$PAGES_URL|g" -e "s|@DATE@|$(date -u +%F)|" site/sitemap.xml > _site/sitemap.xml
+          cp keys/flatpak-repo-public.asc _site/
+          cp "icons/$APP_ID.svg" _site/icon.svg
+          touch _site/.nojekyll
+          # Safety: never publish Anthropic's software
+          ! find _site -name '*.deb' -o -name '*.asar' | grep .
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v4
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists"
+          else
+            gh release create "v$VERSION" _site/claude-desktop.flatpakref \
+              --title "Claude Desktop $VERSION" \
+              --notes "Packages Claude Desktop $VERSION (downloaded from Anthropic at install time; no Anthropic software is included here).
+
+          Install: \`flatpak install --user $PAGES_URL/claude-desktop.flatpakref\`
+          Update: \`flatpak update\`"
+          fi

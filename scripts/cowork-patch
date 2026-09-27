@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""cowork-patch: point Claude's Cowork VM at the QEMU tools bundled in this
+Flatpak, by changing two path strings in a COPY of app.asar.
+
+    cowork-patch ORIGINAL.asar PATCHED.asar
+
+Claude looks for the VM firmware and virtiofsd under /usr, which a Flatpak
+cannot provide. Each rule swaps "/usr/..." for "/app/..." — the same length,
+so no byte in the archive moves. The original file is never modified.
+
+If anything is not exactly as expected, nothing is written and the exit code
+is non-zero: Claude then runs unpatched (Cowork off, everything else works).
+"""
+import json
+import struct
+import sys
+
+RULES = [
+    (b"/usr/share/OVMF/", b"/app/share/OVMF/"),
+    (b"/usr/libexec/virtiofsd", b"/app/libexec/virtiofsd"),
+]
+
+
+def asar_header(data):
+    """Return the raw JSON header of an asar archive (and check it parses)."""
+    # Layout: uint32 4 | uint32 header_size | uint32 ... | uint32 json_len | json
+    if len(data) < 16:
+        raise ValueError("file too small to be an asar archive")
+    json_len = struct.unpack_from("<I", data, 12)[0]
+    raw = data[16:16 + json_len]
+    json.loads(raw)
+    return raw
+
+
+def main(src, dst):
+    with open(src, "rb") as f:
+        data = f.read()
+    header = asar_header(data)
+
+    patched = data
+    for old, new in RULES:
+        assert len(old) == len(new), "rules must keep the same length"
+        count = patched.count(old)
+        if count == 0:
+            print(f"disabled: {old.decode()} not found (Claude changed; patch needs an update)")
+            return 1
+        if old in header:
+            print(f"disabled: {old.decode()} found in the archive index; refusing to patch")
+            return 1
+        patched = patched.replace(old, new)
+        print(f"patched {count}x {old.decode()} -> {new.decode()}")
+
+    if len(patched) != len(data) or asar_header(patched) != header:
+        print("disabled: archive layout changed after patching; refusing")
+        return 1
+
+    with open(dst, "wb") as f:
+        f.write(patched)
+    print("enabled")
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print(__doc__.strip().splitlines()[2].strip())
+        sys.exit(2)
+    try:
+        sys.exit(main(sys.argv[1], sys.argv[2]))
+    except Exception as e:  # never let a surprise break the install
+        print(f"disabled: {e}")
+        sys.exit(1)

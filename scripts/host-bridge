@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 HOME = os.environ["HOME"]
-CONF = os.path.join(HOME, ".config/claude-desktop-flatpak/host.conf")
+CONF = os.path.join(HOME, ".config/claude-desktop-flatpak/settings.conf")
 CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "host-bridge")
 HOST_BIN = os.environ.get("HOST_BIN") or os.path.join(
     os.environ["XDG_RUNTIME_DIR"], "app", os.environ["FLATPAK_ID"], "host-bin")

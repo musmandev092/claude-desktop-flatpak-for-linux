@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Desktop for Linux – Flatpak for Fedora, Silverblue, Arch &amp; any distro</title>
+<meta name="description" content="Install the official Claude Desktop app on Fedora, Fedora Silverblue, Arch, openSUSE and any Linux distribution with one Flatpak command. Claude Code, MCP plugins and Cowork included, with automatic updates. Unofficial, open source.">
+<link rel="canonical" href="@URL@/">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="robots" content="index,follow">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Claude Desktop for Linux – Flatpak for every distro">
+<meta property="og:description" content="Run the official Claude Desktop on Fedora, Silverblue, Arch and more. Claude Code, MCP plugins, Cowork and automatic updates.">
+<meta property="og:url" content="@URL@/">
+<meta property="og:image" content="@URL@/icon.svg">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Claude Desktop for Linux (unofficial Flatpak)",
+  "operatingSystem": "Linux",
+  "applicationCategory": "DeveloperApplication",
+  "softwareVersion": "@VERSION@",
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+  "url": "@URL@/",
+  "downloadUrl": "@URL@/claude-desktop.flatpakref",
+  "license": "https://opensource.org/licenses/MIT",
+  "codeRepository": "https://github.com/musmandev092/claude-desktop-flatpak-for-linux"
+}
+</script>
+<style>
+  :root {
+    --bg: #faf9f6; --fg: #1d2330; --muted: #5b6475; --card: #ffffff;
+    --line: #e3e1da; --accent: #2b3a55; --code-bg: #f1efe8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171d; --fg: #e8e6e1; --muted: #a2a9b6; --card: #1b1f27;
+      --line: #2c323d; --accent: #9fb4dc; --code-bg: #232833;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171d; --fg: #e8e6e1; --muted: #a2a9b6; --card: #1b1f27;
+    --line: #2c323d; --accent: #9fb4dc; --code-bg: #232833;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { display: flex; gap: 16px; align-items: center; }
+  header img { width: 64px; height: 64px; flex: none; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0; }
+  .tag { color: var(--muted); margin: 4px 0 0; }
+  h2 { margin-top: 2.2em; font-size: 1.3rem; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; font-size: 0.9rem; }
+  code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  ul { padding-left: 1.2em; }
+  .note { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 12px 16px; color: var(--muted); font-size: 0.95rem; }
+  a { color: var(--accent); }
+  footer { margin-top: 48px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.svg" alt="">
+    <div>
+      <h1>Claude Desktop for Linux</h1>
+      <p class="tag">Unofficial Flatpak · Fedora, Silverblue, Arch, openSUSE &amp; any distro · version @VERSION@</p>
+    </div>
+  </header>
+
+  <p>Anthropic ships the Claude desktop app for Linux only as a <code>.deb</code> for Ubuntu and Debian.
+     This Flatpak runs the <strong>same official app</strong> on every other distribution, with
+     <strong>Claude Code</strong>, <strong>all MCP plugins</strong>, <strong>Cowork</strong> and automatic updates.</p>
+
+  <h2>Install Claude Desktop on Fedora, Silverblue, Arch or any Linux</h2>
+  <pre><code>flatpak install --user @URL@/claude-desktop.flatpakref</code></pre>
+  <p>Then open <em>Desktop client for Claude</em> from your app menu. Updates arrive with
+     <code>flatpak update</code> or GNOME Software, like any other Flatpak.</p>
+
+  <h2>What works</h2>
+  <ul>
+    <li>Chat, projects and sign-in with your claude.ai account</li>
+    <li>Claude Code sessions and the built-in terminal, using your real tools</li>
+    <li>Every local MCP plugin (<code>npx</code>, <code>uvx</code>, <code>docker</code>, …) — no config changes</li>
+    <li>Cowork, with its virtual machine (needs KVM)</li>
+    <li>Works on atomic desktops: plugins can run inside your toolbox</li>
+  </ul>
+
+  <h2>Use your toolbox for plugins (Silverblue, Kinoite, Bazzite)</h2>
+  <p>Create <code>~/.config/claude-desktop-flatpak/settings.conf</code> with:</p>
+  <pre><code>TOOLBOX=dev</code></pre>
+  <p>Restart the app. Plugins and Claude Code now use the tools installed in that toolbox.</p>
+
+  <h2>How it works — and why it's safe</h2>
+  <p>This project publishes only packaging files (MIT licence). When you install, Flatpak
+     downloads the official Claude package directly from <code>downloads.claude.ai</code> and
+     checks its SHA-256 checksum. No Anthropic software is hosted or redistributed here.</p>
+
+  <p class="note">This is an unofficial community project. It is not affiliated with, endorsed by,
+     or supported by Anthropic. “Claude” is a trademark of Anthropic, PBC. The Claude app is subject
+     to Anthropic's terms. Packaging built with the help of an AI assistant.</p>
+
+  <footer>
+    <a href="https://github.com/musmandev092/claude-desktop-flatpak-for-linux">Source code on GitHub</a> ·
+    <a href="https://github.com/musmandev092/claude-desktop-flatpak-for-linux/issues">Report a problem</a>
+  </footer>
+</main>
+</body>
+</html>

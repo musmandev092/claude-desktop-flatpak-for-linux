@@ -1,0 +1,8 @@
+[Flatpak Repo]
+Title=Claude Desktop for Linux (unofficial)
+Url=@URL@/repo/
+Homepage=https://github.com/musmandev092/claude-desktop-flatpak-for-linux
+Comment=Unofficial Flatpak of the Claude desktop app, with automatic updates
+Description=Downloads the official Claude Desktop from Anthropic at install time. Not affiliated with Anthropic.
+Icon=@URL@/icon.svg
+GPGKey=@GPGKEY@

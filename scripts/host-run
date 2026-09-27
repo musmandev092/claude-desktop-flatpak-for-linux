@@ -10,10 +10,17 @@
 #      (useful in MCP configs that use an absolute path, or another toolbox).
 set -u
 
-CONF="$HOME/.config/claude-desktop-flatpak/host.conf"
+# Some callers start us with an almost empty environment (e.g. Claude Code
+# reading your login shell). flatpak-spawn still needs the session bus.
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=/run/flatpak/bus}"
+export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+
+CONF="$HOME/.config/claude-desktop-flatpak/settings.conf"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/host-bridge"
 
-# Where to run: TOOLBOX=<name> in host.conf, or empty for the host itself
+# Where to run: TOOLBOX=<name> in settings.conf, or empty for the host itself
 TOOLBOX=$(sed -n 's/^[[:space:]]*TOOLBOX=//p' "$CONF" 2>/dev/null | tail -n1 | tr -d "\"' ")
 
 name=${0##*/}
