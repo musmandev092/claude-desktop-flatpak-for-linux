@@ -1,0 +1,60 @@
+#!/bin/bash
+# cowork-helper-shim: stands in for Claude's cowork-linux-helper.
+#
+# The helper talks to the Cowork VM over vsock, and Flatpak's sandbox blocks
+# vsock sockets for every app. So this shim runs the REAL helper outside the
+# sandbox, in a small bubblewrap container on the host that looks like our
+# Flatpak (the runtime as /usr, this app as /app) but without the socket
+# filter. The helper, QEMU, OVMF and virtiofsd all come from this Flatpak.
+set -u
+
+REAL=/app/extra/claude-desktop/resources/cowork-linux-helper.real
+SETTINGS="$HOME/.config/claude-desktop-flatpak/settings.conf"
+
+# OPT-IN: without COWORK_LOCAL=on the real helper runs inside the sandbox as
+# usual, can't open its vsock socket, and Claude uses the cloud VM instead.
+if ! grep -qx 'COWORK_LOCAL=on' "$SETTINGS" 2>/dev/null; then
+    exec "$REAL" "$@"
+fi
+SHARED="$XDG_RUNTIME_DIR/app/$FLATPAK_ID"      # same path on the host
+
+# The socket Claude wants (-socket PATH, or the helper's default)
+socket="$XDG_RUNTIME_DIR/claude-cowork-vm.sock"
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -socket|--socket) socket=$2; shift 2 ;;
+        -socket=*|--socket=*) socket=${1#*=}; shift ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+
+# The helper listens in a folder both sides can see; Claude finds it through
+# a link at the path it asked for.
+host_socket="$SHARED/cowork-vm.sock"
+rm -f "$host_socket" "$socket"
+ln -s "$host_socket" "$socket"
+
+# Where our app and its runtime live on the host
+info() { sed -n "s/^$1=//p" /.flatpak-info | head -n1; }
+app_path=$(info app-path)
+runtime_path=$(info runtime-path)
+if [ -z "$app_path" ] || [ -z "$runtime_path" ]; then
+    echo "cowork-helper-shim: cannot find app/runtime paths in /.flatpak-info" >&2
+    exit 1
+fi
+
+exec flatpak-spawn --host --watch-bus \
+    bwrap --die-with-parent --unshare-pid \
+        --tmpfs / \
+        --ro-bind "$runtime_path" /usr \
+        --ro-bind "$app_path" /app \
+        --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+        --symlink usr/bin /bin --symlink usr/sbin /sbin \
+        --ro-bind /etc /etc \
+        --dev-bind /dev /dev --proc /proc --bind /sys /sys \
+        --bind /var /var --bind /run /run --bind /tmp /tmp \
+        --bind-try /home /home --bind-try /mnt /mnt --bind-try /media /media \
+        --setenv PATH /app/bin:/usr/bin \
+        --setenv LD_LIBRARY_PATH /app/lib \
+        "$REAL" -socket "$host_socket" "${args[@]}"

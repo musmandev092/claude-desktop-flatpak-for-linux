@@ -20,6 +20,10 @@ R=claude-desktop/resources
 if python3 /app/bin/cowork-patch claude-desktop-orig/resources/app.asar "$R/app.asar.new" > cowork-status 2>&1; then
     rm "$R/app.asar"                  # drop the hard link, not the original
     mv "$R/app.asar.new" "$R/app.asar"
+    # Flatpak blocks the vsock socket Cowork's helper needs, so the twin gets
+    # a shim that runs the real helper outside the sandbox (see the shim)
+    mv "$R/cowork-linux-helper" "$R/cowork-linux-helper.real"
+    install -m755 /app/bin/cowork-helper-shim "$R/cowork-linux-helper"
 else
     rm -f "$R/app.asar.new"           # twin stays identical to the original
 fi

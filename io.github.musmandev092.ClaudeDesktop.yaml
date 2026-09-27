@@ -135,6 +135,7 @@ modules:
       - install -Dm755 host-run ${FLATPAK_DEST}/bin/host-run
       - install -Dm755 host-bridge ${FLATPAK_DEST}/bin/host-bridge
       - install -Dm755 cowork-patch ${FLATPAK_DEST}/bin/cowork-patch
+      - install -Dm755 cowork-helper-shim ${FLATPAK_DEST}/bin/cowork-helper-shim
       # Cowork uses the virtiofsd that ships inside Claude's .deb
       - install -d ${FLATPAK_DEST}/libexec
       - ln -s /app/extra/claude-desktop/resources/virtiofsd ${FLATPAK_DEST}/libexec/virtiofsd
@@ -168,6 +169,8 @@ modules:
         path: scripts/host-bridge
       - type: file
         path: scripts/cowork-patch
+      - type: file
+        path: scripts/cowork-helper-shim
       - type: file
         path: io.github.musmandev092.ClaudeDesktop.desktop
       - type: file

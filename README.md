@@ -39,6 +39,9 @@ TOOLBOX=dev
 
 # Run Claude without the Cowork patch (Cowork turns off, everything else works).
 #COWORK=off
+
+# Run the Cowork VM on THIS computer (opt-in, see "Cowork" below).
+#COWORK_LOCAL=on
 ```
 
 Restart the app after changing it.
@@ -61,8 +64,20 @@ New tools you install are picked up **after restarting** the app.
 
 ### Cowork
 
-Cowork needs hardware virtualisation (KVM) and the `vhost_vsock` kernel module.
-If the Cowork tab says it lacks permission, add yourself to the `kvm` group:
+By default, Cowork runs in **Anthropic's cloud VM**. It works, and your
+files still reach your folders.
+
+To run the Cowork VM **on your own computer** instead, add `COWORK_LOCAL=on` to
+`settings.conf` and restart the app.
+
+⚠️ **What this does:** Cowork's helper talks to its VM over a *vsock* socket,
+and Flatpak blocks vsock for every app. With `COWORK_LOCAL=on`, the helper and
+QEMU run **outside the Flatpak sandbox**, in a small bubblewrap container on
+your host (using the QEMU, firmware and virtiofsd bundled in this Flatpak).
+That removes a sandbox protection for the VM, so it is off by default.
+
+Needs hardware virtualisation (KVM) and the `vhost_vsock` kernel module. If the
+Cowork tab says it lacks permission, add yourself to the `kvm` group:
 
 ```sh
 sudo usermod -aG kvm $USER   # then log out and back in
