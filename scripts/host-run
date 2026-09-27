@@ -87,7 +87,7 @@ LOAD_ENV='while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done < "$0";
 if [ -z "$TOOLBOX" ]; then
     if [ -t 0 ] && [ -t 1 ]; then
         # A terminal: host-spawn gives the command a real pseudo-terminal (pty)
-        exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash -c "$LOAD_ENV" "$job" "$@"
+        exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
     fi
     # Pipes: --watch-bus stops the command when Claude exits
     exec 3<"$job"; rm -f "$job"
@@ -98,17 +98,20 @@ fi
 if [ -t 0 ] && [ -t 1 ]; then
     # A terminal: foreground with a real pty (closing the pty ends the command)
     exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM \
-        toolbox run -c "$TOOLBOX" bash -c "$LOAD_ENV" "$job" "$@"
+        toolbox run -c "$TOOLBOX" bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
 fi
 
 # Runs inside the toolbox (which sees host PIDs). Loads the environment,
 # starts the command, and:
 #   - stops the command if the host side ($1) disappears (Claude exited),
 #   - forwards SIGTERM/SIGINT/SIGHUP,
-#   - saves the real exit code, because `toolbox run` turns 127 into 0.
+#   - saves the real exit code, because `toolbox run` turns 127 into 0,
+#   - writes the command's output to a private pipe ($job.out), because
+#     `toolbox run` starts a login shell whose banners (fastfetch, motd…)
+#     would otherwise mix into the output and break plugins' JSON.
 WATCHDOG='p=$1 job=$2; shift 2
 while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done < "$job"; rm -f "$job"
-"$@" <&0 & c=$!
+"$@" <&0 >"$job.out" & c=$!
 echo "$c" > "$job.pid"
 ( while kill -0 "$p" 2>/dev/null; do sleep 2; done
   kill -TERM "$c" 2>/dev/null; sleep 3; kill -KILL "$c" 2>/dev/null ) </dev/null >/dev/null 2>&1 & m=$!
@@ -116,17 +119,24 @@ trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP
 while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || break; done
 kill "$m" 2>/dev/null
 echo "$s" > "$job.status"
+# Host side already gone (Claude was killed): nobody else will clean up
+kill -0 "$p" 2>/dev/null || rm -f "$job.out" "$job.pid" "$job.status"
 exit "$s"'
 
 # Runs on the host. Forwards signals straight to the command's PID, reports
 # the saved exit code and cleans up.
 LAUNCH='box=$1 wd=$2 job=$3; shift 3
 trap '"'"'kill -TERM "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' TERM INT HUP
-toolbox run -c "$box" bash -c "$wd" watchdog "$$" "$job" "$@" <&0 & t=$!
+mkfifo -m 600 "$job.out"
+cat "$job.out" & o=$!                    # the command'"'"'s real output
+toolbox run -c "$box" bash --norc --noprofile -c "$wd" watchdog "$$" "$job" "$@" <&0 >/dev/null & t=$!
 while :; do wait "$t"; r=$?; kill -0 "$t" 2>/dev/null || break; done
+# If the command never started, nobody opened the pipe: unblock cat
+kill -0 "$o" 2>/dev/null && ! [ -s "$job.pid" ] && : >"$job.out"
+wait "$o"
 [ -s "$job.status" ] && r=$(cat "$job.status")
-rm -f "$job" "$job.pid" "$job.status"
+rm -f "$job" "$job.pid" "$job.status" "$job.out"
 exit "$r"'
 
 exec flatpak-spawn --host --watch-bus --directory="$dir" \
-    bash -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" "$job" "$@"
+    bash --norc --noprofile -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" "$job" "$@"

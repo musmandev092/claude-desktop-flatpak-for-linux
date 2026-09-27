@@ -7,6 +7,7 @@ cd "$HOME"
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1${2:+  — $2}"; }
 skip() { echo "SKIP  $1${2:+  — $2}"; }
+is() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "expected [$3] got [$2]"; fi; }
 check() { local name=$1; shift; if "$@" >/dev/null 2>&1; then pass "$name"; else fail "$name"; fi; }
 
 EXTRA=/app/extra
@@ -40,6 +41,23 @@ check "bridge: exit code passes through" bash -c '[ "$(bash -c "exit 7"; echo $?
     && pass "bridge: login shell works from an empty environment" || fail "bridge: login shell from an empty environment"
 out=$(script -qec 'bash -c "tty"' /dev/null 2>/dev/null | tr -d '\r\0')
 case "$out" in *"/dev/pts/"*) pass "bridge: terminal gets a real pty";; *) fail "bridge: terminal gets a real pty" "$out";; esac
+
+# Electron gives plugins SOCKETS as stdin/stdout (not pipes). Bash reads
+# ~/.bashrc when stdin is a socket, so banners there must not leak into the
+# plugin's output. Checked with a socket pair, exactly like the app does it.
+sock_out=$(/usr/bin/python3 -c '
+import socket, subprocess
+a, b = socket.socketpair(); c, d = socket.socketpair()
+p = subprocess.Popen(["python3", "-c", "import sys; print(sys.stdin.readline().strip())"],
+                     stdin=b.fileno(), stdout=d.fileno(), stderr=subprocess.DEVNULL)
+b.close(); d.close(); a.sendall(b"CLEAN-LINE\n"); c.settimeout(60)
+out = b""
+while True:
+    chunk = c.recv(4096)
+    if not chunk: break
+    out += chunk
+print(out.decode(errors="replace").strip()); p.wait()')
+is "bridge: socket stdio stays clean (no shell banners)" "$sock_out" "CLEAN-LINE"
 
 mcp_init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
 mcp() { { echo "$mcp_init"; sleep "$1"; } | timeout 180 "${@:2}" 2>/dev/null | head -c 400; }
