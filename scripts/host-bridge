@@ -1,0 +1,103 @@
+#!/usr/bin/python3
+"""host-bridge: make every command of the host (or your toolbox) available
+inside the sandbox, with no hand-written list.
+
+    host-bridge link   create the command links from the saved list
+                       (scans first if there is no list yet)
+    host-bridge scan   ask the host/toolbox which commands it has, save the list
+
+Each link points to host-run, which runs the real command outside.
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+HOME = os.environ["HOME"]
+CONF = os.path.join(HOME, ".config/claude-desktop-flatpak/host.conf")
+CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "host-bridge")
+HOST_BIN = os.environ.get("HOST_BIN") or os.path.join(
+    os.environ["XDG_RUNTIME_DIR"], "app", os.environ["FLATPAK_ID"], "host-bin")
+HOST_RUN = "/app/bin/host-run"
+
+# Never link these: they must keep working inside the sandbox.
+SKIP = {"sh", "dash", "env", "flatpak", "flatpak-spawn", "host-spawn", "host-run",
+        "host-bridge", "xdg-open", "xdg-email", "bwrap", "toolbox"}
+# The sandbox has its own copies of these, but plugins and Claude Code need
+# YOUR versions (with your packages, keys and settings).
+PREFER_HOST = {"bash", "zsh", "fish", "python", "python3", "pip", "pip3",
+               "git", "ssh", "scp", "perl", "ruby", "make", "gcc", "cc", "g++"}
+NAME_OK = re.compile(r"^[A-Za-z0-9._+-]+$")
+
+
+def toolbox():
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("TOOLBOX="):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return ""
+
+
+def files(target):
+    return (os.path.join(CACHE_DIR, target + ".commands"),
+            os.path.join(CACHE_DIR, target + ".path"))
+
+
+def scan():
+    box = toolbox()
+    prefix = ["toolbox", "run", "-c", box] if box else []
+    script = ('echo "@@PATH=$PATH"; echo "@@NAMES"; IFS=:; '
+              'for d in $PATH; do [ -d "$d" ] && ls -1 "$d"; done')
+    try:
+        out = subprocess.run(["flatpak-spawn", "--host", *prefix, "bash", "-lc", script],
+                             capture_output=True, text=True, timeout=90).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if "@@NAMES" not in out:
+        return False
+    head, names = out.split("@@NAMES", 1)
+    path = head.rsplit("@@PATH=", 1)[-1].strip()
+    commands = sorted({n for n in names.split() if NAME_OK.match(n)})
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    list_file, path_file = files(box or "host")
+    for name, data in ((path_file, path + "\n"), (list_file, "\n".join(commands) + "\n")):
+        with open(name + ".tmp", "w") as f:
+            f.write(data)
+        os.replace(name + ".tmp", name)
+    return True
+
+
+def in_sandbox(name):
+    return any(os.path.exists(os.path.join(d, name)) for d in ("/usr/bin", "/bin"))
+
+
+def link():
+    list_file, _ = files(toolbox() or "host")
+    if not os.path.exists(list_file) and not scan():
+        print("host-bridge: could not reach the host/toolbox", file=sys.stderr)
+        return False
+    with open(list_file) as f:
+        commands = f.read().split()
+    new = HOST_BIN + ".new"
+    shutil.rmtree(new, ignore_errors=True)
+    os.makedirs(new)
+    for name in commands:
+        if name in SKIP or os.path.exists("/app/bin/" + name):
+            continue
+        if in_sandbox(name) and name not in PREFER_HOST:
+            continue
+        os.symlink(HOST_RUN, os.path.join(new, name))
+    shutil.rmtree(HOST_BIN, ignore_errors=True)
+    os.rename(new, HOST_BIN)
+    return True
+
+
+if __name__ == "__main__":
+    action = sys.argv[1] if len(sys.argv) > 1 else "link"
+    ok = {"link": link, "scan": scan}.get(action, lambda: False)()
+    sys.exit(0 if ok else 1)

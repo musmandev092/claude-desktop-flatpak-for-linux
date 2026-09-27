@@ -1,0 +1,95 @@
+#!/bin/bash
+# host-run: run a command OUTSIDE the Flatpak sandbox — on the host, or inside
+# a toolbox — so Claude's plugins (MCP servers) and Claude Code can use your
+# real tools (node, npx, uvx, docker, git, ...).
+#
+# It is called in two ways:
+#   1. Through a link named after a command (e.g. host-bin/npx -> host-run).
+#      Then it runs that same command outside.
+#   2. Directly:  host-run [--toolbox NAME | --host] COMMAND [ARGS...]
+#      (useful in MCP configs that use an absolute path, or another toolbox).
+set -u
+
+CONF="$HOME/.config/claude-desktop-flatpak/host.conf"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/host-bridge"
+
+# Where to run: TOOLBOX=<name> in host.conf, or empty for the host itself
+TOOLBOX=$(sed -n 's/^[[:space:]]*TOOLBOX=//p' "$CONF" 2>/dev/null | tail -n1 | tr -d "\"' ")
+
+name=${0##*/}
+if [ "$name" = "host-run" ]; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --toolbox) TOOLBOX=${2:-}; shift 2 ;;
+            --host)    TOOLBOX=""; shift ;;
+            --)        shift; break ;;
+            *)         break ;;
+        esac
+    done
+    if [ $# -eq 0 ]; then
+        echo "usage: host-run [--toolbox NAME | --host] COMMAND [ARGS...]" >&2
+        exit 2
+    fi
+else
+    set -- "$name" "$@"
+fi
+
+# Pass our environment along (API keys from the MCP config, etc.), except
+# variables that only make sense inside the sandbox.
+envs=()
+while IFS= read -r -d '' kv; do
+    case "${kv%%=*}" in
+        *PATH|LD_*|FLATPAK_*|DBUS_*|XDG_DATA_DIRS|XDG_CONFIG_DIRS|XDG_*_HOME|\
+        container|GIO_*|GST_*|GDK_*|GTK_*|GSETTINGS_*|PYTHON*|ZYPAK_*|CHROME_*|\
+        ELECTRON_*|SHELL|SHLVL|PWD|OLDPWD|_|HOST_BIN) continue ;;
+    esac
+    # Values pointing into the sandbox (/run/flatpak/..., /app/...) are useless outside
+    case "${kv#*=}" in
+        */run/flatpak/*|/app/*) continue ;;
+    esac
+    envs+=("$kv")
+done < <(env -0)
+
+# Use the real PATH of the host/toolbox (saved by host-bridge), so tools in
+# ~/.local/bin, npm globals, etc. are found.
+target_path_file="$CACHE_DIR/${TOOLBOX:-host}.path"
+if [ -s "$target_path_file" ]; then
+    envs+=("PATH=$(cat "$target_path_file")")
+fi
+
+cmd=()
+[ -n "$TOOLBOX" ] && cmd=(toolbox run -c "$TOOLBOX")
+cmd+=(env "${envs[@]}" "$@")
+
+# Inside a toolbox, a process is not stopped when the host side goes away.
+# This watchdog runs in the toolbox next to the command and stops it when the
+# host process that launched it (whose PID the toolbox can see) is gone.
+WATCHDOG='p=$1; shift
+"$@" <&0 & c=$!
+( while kill -0 "$p" 2>/dev/null; do sleep 2; done
+  kill -TERM "$c" 2>/dev/null; sleep 3; kill -KILL "$c" 2>/dev/null ) </dev/null >/dev/null 2>&1 & m=$!
+trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP
+while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || break; done
+kill "$m" 2>/dev/null
+exit "$s"'
+# $$ of this host-side bash becomes the PID of "toolbox run" (exec keeps it)
+LAUNCH='exec toolbox run -c "$1" bash -c "$2" watchdog "$$" "${@:3}"'
+
+# The working directory must exist outside too; the sandbox's /tmp and /app don't.
+case "$PWD" in
+    "$HOME"|"$HOME"/*|/run/user/*|/media/*|/mnt/*|/var/home/*) dir=$PWD ;;
+    *) dir=$HOME ;;
+esac
+
+if [ -t 0 ] && [ -t 1 ]; then
+    # A terminal: host-spawn gives the command a real pseudo-terminal (pty)
+    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM "${cmd[@]}"
+else
+    # Pipes (MCP servers talk over stdin/stdout). --watch-bus stops the
+    # process when Claude exits, so no plugin is left running.
+    if [ -n "$TOOLBOX" ]; then
+        exec flatpak-spawn --host --watch-bus --directory="$dir" \
+            bash -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" env "${envs[@]}" "$@"
+    fi
+    exec flatpak-spawn --host --watch-bus --directory="$dir" "${cmd[@]}"
+fi

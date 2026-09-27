@@ -6,6 +6,8 @@ base: org.electronjs.Electron2.BaseApp
 base-version: '25.08'
 command: claude-desktop
 separate-locales: false
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
 
 finish-args:
   # Display: Wayland first, X11 only as fallback
@@ -23,13 +25,39 @@ finish-args:
   - --talk-name=org.kde.StatusNotifierWatcher
   # Claude Code needs to open project folders
   - --filesystem=home
+  # Plugin bridge: lets host-run start commands on the host / in a toolbox
+  - --talk-name=org.freedesktop.Flatpak
 
 modules:
+  # host-spawn: runs host commands with a real terminal (pty), built from source
+  - name: host-spawn
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        CGO_ENABLED: '0'
+        GOFLAGS: -mod=vendor
+    build-commands:
+      - GOCACHE="$PWD/.gocache" go build -trimpath -ldflags "-s -w -X main.Version=1.6.2" -o ${FLATPAK_DEST}/bin/host-spawn .
+    sources:
+      - type: git
+        url: https://github.com/1player/host-spawn.git
+        tag: v1.6.2
+        commit: d76c3a5196a8e0943f6a1c7c9f1acde4bd83c40c
+      # Go dependencies, so the build needs no network
+      - type: archive
+        url: https://github.com/1player/host-spawn/releases/download/v1.6.2/host-spawn-vendor.tar.zst
+        sha256: 9abfddf5c1eba0704d643de06988ff3b8cdd2f594bfb4d1c0027315552dad5cc
+    cleanup:
+      - /lib/debug
+
   - name: claude-desktop
     buildsystem: simple
     build-commands:
       - install -Dm755 apply_extra.sh ${FLATPAK_DEST}/bin/apply_extra
       - install -Dm755 claude-desktop.sh ${FLATPAK_DEST}/bin/claude-desktop
+      - install -Dm755 host-run ${FLATPAK_DEST}/bin/host-run
+      - install -Dm755 host-bridge ${FLATPAK_DEST}/bin/host-bridge
       - install -Dm644 ${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 ${FLATPAK_ID}.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm644 ${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
@@ -54,6 +82,10 @@ modules:
         path: scripts/apply_extra.sh
       - type: file
         path: scripts/claude-desktop.sh
+      - type: file
+        path: scripts/host-run
+      - type: file
+        path: scripts/host-bridge
       - type: file
         path: io.github.musmandev092.ClaudeDesktop.desktop
       - type: file
