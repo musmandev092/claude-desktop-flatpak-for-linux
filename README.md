@@ -103,6 +103,16 @@ flatpak remote-add --user --no-gpg-verify claude-local repo
 flatpak install --user claude-local io.github.musmandev092.ClaudeDesktop
 ```
 
+## Tests
+
+Run against the installed app (close Claude first):
+
+```sh
+tests/run-tests.sh        # 30 checks: install, bridge, MCP plugins, Cowork VM boot, GUI
+tests/extreme-tests.sh    # 46 edge cases: odd arguments, 100 MB pipes, signals, 50 parallel
+                          # calls, missing/stopped toolbox, X11, no KVM, crashes, leaked secrets
+```
+
 ## Disclaimer
 
 This is an **unofficial** community project. It is **not affiliated with, endorsed

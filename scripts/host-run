@@ -15,10 +15,13 @@ set -u
 : "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
 : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=/run/flatpak/bus}"
+: "${FLATPAK_ID:=io.github.musmandev092.ClaudeDesktop}"
 export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 
 CONF="$HOME/.config/claude-desktop-flatpak/settings.conf"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/host-bridge"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.var/app/$FLATPAK_ID/cache}/host-bridge"
+# Same path on the host, in toolboxes and in the sandbox; private to us
+RUN_DIR="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-run"
 
 # Where to run: TOOLBOX=<name> in settings.conf, or empty for the host itself
 TOOLBOX=$(sed -n 's/^[[:space:]]*TOOLBOX=//p' "$CONF" 2>/dev/null | tail -n1 | tr -d "\"' ")
@@ -41,46 +44,30 @@ else
     set -- "$name" "$@"
 fi
 
-# Pass our environment along (API keys from the MCP config, etc.), except
-# variables that only make sense inside the sandbox.
-envs=()
+# ── Environment to pass along ───────────────────────────────────────────────
+# Everything we have (API keys from the MCP config, etc.), except variables
+# that only make sense inside the sandbox. It goes through a private file in
+# "env -0" format: no size limit, and secrets never show up in `ps`.
+mkdir -p -m 700 "$RUN_DIR"
+find "$RUN_DIR" -name 'job.*' -mmin +1440 -delete 2>/dev/null   # leftovers of killed jobs
+job=$(mktemp -p "$RUN_DIR" job.XXXXXXXX)
 while IFS= read -r -d '' kv; do
     case "${kv%%=*}" in
         *PATH|LD_*|FLATPAK_*|DBUS_*|XDG_DATA_DIRS|XDG_CONFIG_DIRS|XDG_*_HOME|\
         container|GIO_*|GST_*|GDK_*|GTK_*|GSETTINGS_*|PYTHON*|ZYPAK_*|CHROME_*|\
-        ELECTRON_*|SHELL|SHLVL|PWD|OLDPWD|_|HOST_BIN) continue ;;
+        ELECTRON_*|SHELL|SHLVL|PWD|OLDPWD|_|HOST_BIN|BASH_FUNC_*) continue ;;
     esac
     # Values pointing into the sandbox (/run/flatpak/..., /app/...) are useless outside
     case "${kv#*=}" in
         */run/flatpak/*|/app/*) continue ;;
     esac
-    envs+=("$kv")
-done < <(env -0)
-
-# Use the real PATH of the host/toolbox (saved by host-bridge), so tools in
-# ~/.local/bin, npm globals, etc. are found.
-target_path_file="$CACHE_DIR/${TOOLBOX:-host}.path"
-if [ -s "$target_path_file" ]; then
-    envs+=("PATH=$(cat "$target_path_file")")
+    printf '%s\0' "$kv"
+done < <(env -0) > "$job"
+# The real PATH of the host/toolbox (saved by host-bridge), so tools in
+# ~/.local/bin, npm globals, etc. are found
+if [ -s "$CACHE_DIR/${TOOLBOX:-host}.path" ]; then
+    printf 'PATH=%s\0' "$(cat "$CACHE_DIR/${TOOLBOX:-host}.path")" >> "$job"
 fi
-
-cmd=()
-[ -n "$TOOLBOX" ] && cmd=(toolbox run -c "$TOOLBOX")
-cmd+=(env "${envs[@]}" "$@")
-
-# Inside a toolbox, a process is not stopped when the host side goes away.
-# This watchdog runs in the toolbox next to the command and stops it when the
-# host process that launched it (whose PID the toolbox can see) is gone.
-WATCHDOG='p=$1; shift
-"$@" <&0 & c=$!
-( while kill -0 "$p" 2>/dev/null; do sleep 2; done
-  kill -TERM "$c" 2>/dev/null; sleep 3; kill -KILL "$c" 2>/dev/null ) </dev/null >/dev/null 2>&1 & m=$!
-trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP
-while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || break; done
-kill "$m" 2>/dev/null
-exit "$s"'
-# $$ of this host-side bash becomes the PID of "toolbox run" (exec keeps it)
-LAUNCH='exec toolbox run -c "$1" bash -c "$2" watchdog "$$" "${@:3}"'
 
 # The working directory must exist outside too; the sandbox's /tmp and /app don't.
 case "$PWD" in
@@ -88,15 +75,58 @@ case "$PWD" in
     *) dir=$HOME ;;
 esac
 
-if [ -t 0 ] && [ -t 1 ]; then
-    # A terminal: host-spawn gives the command a real pseudo-terminal (pty)
-    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM "${cmd[@]}"
-else
-    # Pipes (MCP servers talk over stdin/stdout). --watch-bus stops the
-    # process when Claude exits, so no plugin is left running.
-    if [ -n "$TOOLBOX" ]; then
-        exec flatpak-spawn --host --watch-bus --directory="$dir" \
-            bash -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" env "${envs[@]}" "$@"
+# Many commands starting at the same moment (Claude starts all MCP servers at
+# once) can overflow the session bus proxy's queue. A 10 ms gap between
+# connections prevents that.
+{ flock 9; sleep 0.01; } 9>"$RUN_DIR/.lock"
+
+# Loads the env file given as $0, deletes it, then runs the command
+LOAD_ENV='while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done < "$0"; rm -f "$0"; exec "$@"'
+
+# ── On the host ──────────────────────────────────────────────────────────────
+if [ -z "$TOOLBOX" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+        # A terminal: host-spawn gives the command a real pseudo-terminal (pty)
+        exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash -c "$LOAD_ENV" "$job" "$@"
     fi
-    exec flatpak-spawn --host --watch-bus --directory="$dir" "${cmd[@]}"
+    # Pipes: --watch-bus stops the command when Claude exits
+    exec 3<"$job"; rm -f "$job"
+    exec flatpak-spawn --host --watch-bus --directory="$dir" --env-fd=3 "$@"
 fi
+
+# ── Inside a toolbox ─────────────────────────────────────────────────────────
+if [ -t 0 ] && [ -t 1 ]; then
+    # A terminal: foreground with a real pty (closing the pty ends the command)
+    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM \
+        toolbox run -c "$TOOLBOX" bash -c "$LOAD_ENV" "$job" "$@"
+fi
+
+# Runs inside the toolbox (which sees host PIDs). Loads the environment,
+# starts the command, and:
+#   - stops the command if the host side ($1) disappears (Claude exited),
+#   - forwards SIGTERM/SIGINT/SIGHUP,
+#   - saves the real exit code, because `toolbox run` turns 127 into 0.
+WATCHDOG='p=$1 job=$2; shift 2
+while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done < "$job"; rm -f "$job"
+"$@" <&0 & c=$!
+echo "$c" > "$job.pid"
+( while kill -0 "$p" 2>/dev/null; do sleep 2; done
+  kill -TERM "$c" 2>/dev/null; sleep 3; kill -KILL "$c" 2>/dev/null ) </dev/null >/dev/null 2>&1 & m=$!
+trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP
+while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || break; done
+kill "$m" 2>/dev/null
+echo "$s" > "$job.status"
+exit "$s"'
+
+# Runs on the host. Forwards signals straight to the command's PID, reports
+# the saved exit code and cleans up.
+LAUNCH='box=$1 wd=$2 job=$3; shift 3
+trap '"'"'kill -TERM "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' TERM INT HUP
+toolbox run -c "$box" bash -c "$wd" watchdog "$$" "$job" "$@" <&0 & t=$!
+while :; do wait "$t"; r=$?; kill -0 "$t" 2>/dev/null || break; done
+[ -s "$job.status" ] && r=$(cat "$job.status")
+rm -f "$job" "$job.pid" "$job.status"
+exit "$r"'
+
+exec flatpak-spawn --host --watch-bus --directory="$dir" \
+    bash -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" "$job" "$@"

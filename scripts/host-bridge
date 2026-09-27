@@ -8,11 +8,13 @@ inside the sandbox, with no hand-written list.
 
 Each link points to host-run, which runs the real command outside.
 """
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 
 HOME = os.environ["HOME"]
 CONF = os.path.join(HOME, ".config/claude-desktop-flatpak/settings.conf")
@@ -83,17 +85,40 @@ def link():
         return False
     with open(list_file) as f:
         commands = f.read().split()
-    new = HOST_BIN + ".new"
-    shutil.rmtree(new, ignore_errors=True)
-    os.makedirs(new)
-    for name in commands:
-        if name in SKIP or os.path.exists("/app/bin/" + name):
-            continue
-        if in_sandbox(name) and name not in PREFER_HOST:
-            continue
-        os.symlink(HOST_RUN, os.path.join(new, name))
-    shutil.rmtree(HOST_BIN, ignore_errors=True)
-    os.rename(new, HOST_BIN)
+    wanted = sorted(n for n in commands
+                    if n not in SKIP and not os.path.exists("/app/bin/" + n)
+                    and (n in PREFER_HOST or not in_sandbox(n)))
+    tag = hashlib.sha1("\n".join(wanted).encode()).hexdigest()[:12]
+    target = f"{HOST_BIN}.{tag}"
+
+    # Nothing changed: keep the current links (Claude may be using them now)
+    if os.path.islink(HOST_BIN) and os.readlink(HOST_BIN) == target and os.path.isdir(target):
+        return True
+
+    # Build the new folder next to the old one...
+    if not os.path.isdir(target):
+        tmp = target + ".tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp)
+        for name in wanted:
+            os.symlink(HOST_RUN, os.path.join(tmp, name))
+        os.rename(tmp, target)
+    # ...then switch HOST_BIN to it in one atomic step, so a running Claude
+    # never sees a missing command.
+    if os.path.isdir(HOST_BIN) and not os.path.islink(HOST_BIN):
+        shutil.rmtree(HOST_BIN)                   # old layout (plain folder)
+    pointer = HOST_BIN + ".link"
+    if os.path.lexists(pointer):
+        os.remove(pointer)
+    os.symlink(target, pointer)
+    os.replace(pointer, HOST_BIN)
+    # Old folders are removed at the next start, when nothing uses them
+    parent, base = os.path.split(HOST_BIN)
+    for entry in os.listdir(parent):
+        path = os.path.join(parent, entry)
+        if entry.startswith(base + ".") and path != target and not entry.endswith(".link"):
+            if time.time() - os.path.getmtime(path) > 3600:
+                shutil.rmtree(path, ignore_errors=True)
     return True
 
 
