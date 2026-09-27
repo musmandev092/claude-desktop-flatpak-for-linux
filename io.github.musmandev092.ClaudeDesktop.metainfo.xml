@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.musmandev092.ClaudeDesktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary=https://www.anthropic.com/legal/consumer-terms</project_license>
+
+  <name>Desktop client for Claude (unofficial)</name>
+  <summary>Run the official Claude desktop app on any Linux</summary>
+  <developer id="io.github.musmandev092">
+    <name>Muhammad Usman</name>
+  </developer>
+
+  <description>
+    <p>
+      An unofficial Flatpak of Anthropic's Claude desktop app. It downloads the
+      official release directly from Anthropic when you install it and verifies
+      its checksum. No Anthropic software is redistributed by this project.
+    </p>
+    <p>
+      This project is not affiliated with, endorsed by, or supported by Anthropic.
+      Claude is a trademark of Anthropic, PBC.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.musmandev092.ClaudeDesktop.desktop</launchable>
+  <url type="homepage">https://github.com/musmandev092/claude-desktop-flatpak-for-linux</url>
+  <url type="bugtracker">https://github.com/musmandev092/claude-desktop-flatpak-for-linux/issues</url>
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="2.7032.0" date="2026-09-22"/>
+  </releases>
+</component>
