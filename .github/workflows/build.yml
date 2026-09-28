@@ -205,6 +205,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false   # the push below passes the token itself
+          fetch-depth: 0               # history, to compare with the published build
 
       - name: Use the updated manifest
         if: needs.check.outputs.changed == 'true'
@@ -234,6 +235,42 @@ jobs:
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:main
 
+      # A new app build is published only when something that goes INTO the
+      # app changed since the published build: the manifest (so also a new
+      # Claude version), the metainfo, the desktop file or the scripts.
+      # Otherwise the exact published build (same commit, same signatures) is
+      # kept and only the website is updated – users are not asked to
+      # download Claude again for nothing.
+      - name: New app build, or keep the published one?
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          old=$(python3 -c 'import json, sys, urllib.request
+          b = json.load(urllib.request.urlopen(sys.argv[1] + "/BUILDINFO.json", timeout=30))
+          print(b.get("app_source_commit") or b.get("source_commit") or "")' \
+                "$PAGES_URL" 2>/dev/null || true)
+          app_paths=("$MANIFEST" "$APP_ID.metainfo.xml" "$APP_ID.desktop" scripts)
+          keep=false
+          if [ -n "$old" ] && git cat-file -e "$old^{commit}" 2>/dev/null &&
+             git diff --quiet "$old" HEAD -- "${app_paths[@]}"; then
+            pub=$(mktemp)
+            gpg --dearmor < keys/flatpak-repo-public.asc > "$pub"
+            if ostree init --repo=repo --mode=archive-z2 &&
+               ostree --repo=repo remote add --gpg-import="$pub" live "$PAGES_URL/repo/" &&
+               ostree --repo=repo pull --mirror live &&
+               ostree --repo=repo remote delete live; then
+              keep=true
+            else
+              rm -rf repo                      # could not fetch it: publish the new build
+            fi
+          fi
+          if [ "$keep" = true ]; then
+            echo "Nothing inside the app changed since $old: keeping the published build $(cat "repo/refs/heads/app/$APP_ID/x86_64/master")"
+          else
+            echo "The app changed (or there is no published build yet): publishing the new build"
+            tar -xf out/repo.tar
+          fi
+          echo "APP_KEPT=$keep" >> "$GITHUB_ENV"
+
       - name: Sign repository
         env:
           GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
@@ -243,7 +280,6 @@ jobs:
             echo "::error::The FLATPAK_GPG_PRIVATE_KEY / FLATPAK_GPG_KEY_ID secrets are not set"
             exit 1
           fi
-          tar -xf out/repo.tar
           GNUPGHOME=$(mktemp -d)
           export GNUPGHOME
           trap 'rm -rf "$GNUPGHOME"' EXIT
@@ -313,13 +349,21 @@ jobs:
           ostree = open(f"repo/refs/heads/app/{os.environ['APP_ID']}/x86_64/master").read().strip()
           assert re.fullmatch(r"[0-9a-f]{64}", ostree), ostree
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+          kept = os.environ.get("APP_KEPT") == "true"
+          old = {}
+          if kept:   # the app is the published one: say who built it, and from what
+              import urllib.request
+              old = json.load(urllib.request.urlopen(os.environ["PAGES_URL"] + "/BUILDINFO.json", timeout=30))
           info = {
               "app_id": os.environ["APP_ID"],
               "claude_version": os.environ["VERSION"],
               "flatpak_commit": ostree,
-              "source_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
-                                              text=True, check=True).stdout.strip(),
-              "built_by": run,
+              "app_source_commit": (old.get("app_source_commit") or old.get("source_commit")) if kept else head,
+              "built_by": old.get("built_by") if kept else run,
+              "app_kept_from_previous_release": kept,
+              "source_commit": head,
+              "published_by": run,
               "trigger": os.environ["GITHUB_EVENT_NAME"],
               "claude_deb": {"url": deb.group(1), "sha256": deb.group(2), "size": int(deb.group(3))},
               "signing_key_fingerprint": "633C2A74A8C7B2A4F67DAC05F6E3C4A7C815B241",  # gitleaks:allow (public key)
