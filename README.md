@@ -181,6 +181,7 @@ repository rejects a wrong signing key.
 ```sh
 tests/security-tests.sh             # 20 checks
 tests/lint-scripts.sh               # every script (and every script embedded in host-run) parses
+tests/ci-dryrun.py [--changed]     # run the release job locally in GitHub's container (throwaway key)
 ```
 
 | Area | Scenarios | What is generated |
