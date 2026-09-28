@@ -33,16 +33,28 @@ PREFER_HOST = {"bash", "zsh", "fish", "python", "python3", "pip", "pip3",
 NAME_OK = re.compile(r"^[A-Za-z0-9._+-]+$")
 
 
+SETTING = re.compile(rb"[ \t\n\r\f\v]*(?:export[ \t\n\r\f\v]+)?TOOLBOX=(.*)", re.S)
+BOX_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
 def toolbox():
+    """TOOLBOX= from settings.conf, read exactly like host-run does: the last
+    `[export] TOOLBOX=...` line wins, quotes and whitespace are ignored.
+    Only a regular file is read (a FIFO would block), as bytes (any garbage
+    in the file must not crash the bridge)."""
+    value = b""
     try:
-        with open(CONF) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("TOOLBOX="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
+        if not os.path.isfile(CONF):
+            return ""
+        with open(CONF, "rb") as f:
+            data = f.read()
     except OSError:
-        pass
-    return ""
+        return ""
+    for line in data.split(b"\n"):
+        m = SETTING.match(line)
+        if m:
+            value = m.group(1)
+    return re.sub(rb"[\"' \t\n\r\f\v\x00]", b"", value).decode("utf-8", "surrogateescape")
 
 
 def files(target):
@@ -52,6 +64,9 @@ def files(target):
 
 def scan():
     box = toolbox()
+    if box and not BOX_OK.match(box):
+        print(f"host-bridge: invalid toolbox name {box!r} in {CONF}", file=sys.stderr)
+        return False
     prefix = ["toolbox", "run", "-c", box] if box else []
     script = ('echo "@@PATH=$PATH"; echo "@@NAMES"; IFS=:; '
               'for d in $PATH; do [ -d "$d" ] && ls -1 "$d"; done')
@@ -79,7 +94,11 @@ def in_sandbox(name):
 
 
 def link():
-    list_file, _ = files(toolbox() or "host")
+    box = toolbox()
+    if box and not BOX_OK.match(box):          # never build a path from a bad name
+        print(f"host-bridge: invalid toolbox name {box!r} in {CONF}", file=sys.stderr)
+        return False
+    list_file, _ = files(box or "host")
     if not os.path.exists(list_file) and not scan():
         print("host-bridge: could not reach the host/toolbox", file=sys.stderr)
         return False

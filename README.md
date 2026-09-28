@@ -125,10 +125,35 @@ flatpak install --user claude-local io.github.musmandev092.ClaudeDesktop
 Run against the installed app (close Claude first):
 
 ```sh
-tests/run-tests.sh        # 30 checks: install, bridge, MCP plugins, Cowork VM boot, GUI
+tests/run-tests.sh        # 31 checks: install, bridge, MCP plugins, Cowork VM boot, GUI
 tests/extreme-tests.sh    # 46 edge cases: odd arguments, 100 MB pipes, signals, 50 parallel
                           # calls, missing/stopped toolbox, X11, no KVM, crashes, leaked secrets
 ```
+
+Fuzz testing (Claude may stay open): 10,000 generated scenarios, each checked
+against what should happen, with latency/throughput numbers and leak checks.
+
+```sh
+tests/fuzz-tests.sh                 # 10,000 scenarios (a different set: --seed N)
+tests/fuzz-tests.sh --only 1234     # replay one scenario exactly
+tests/fuzz-tests.sh --fallback      # force the slower `toolbox run` path
+```
+
+| Area | Scenarios | What is generated |
+|---|---|---|
+| roundtrip | 3,500 | odd/binary/100 KB arguments, 1 MB of env vars, up to 16 MB stdin/4 MB stdout, odd folders, exit codes |
+| exitcode | 1,000 | every exit code 0–255, missing (127) and non-executable (126) commands |
+| signal | 400 | Ctrl-C / SIGTERM / SIGHUP early and late; nothing may be left running |
+| burst | 100 | 5–80 commands started at the same moment |
+| mcp | 400 | 1–200 JSON messages per plugin session, lock-step and pipelined |
+| cache | 300 | corrupted, missing, FIFO, directory or unreadable toolbox cache |
+| config | 1,300 | broken settings.conf: garbage, binary, CRLF, quotes, `export`, bad names |
+| patcher | 3,000 | valid, truncated, corrupted and hostile app.asar files for the Cowork patch |
+
+Known limits (from Flatpak/toolbox, reproduced without this project):
+`flatpak-spawn` can lose a signal sent in the first ~50 ms while the command is
+still starting (about 1 in 200 under heavy load); on the fallback path Ctrl-C
+reaches the command as SIGTERM.
 
 ## Disclaimer
 
