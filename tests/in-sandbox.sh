@@ -35,14 +35,17 @@ done
 check "bridge: exit code passes through" bash -c '[ "$(bash -c "exit 7"; echo $?)" = 7 ]'
 [ "$(echo hello | python3 -c 'import sys; print(sys.stdin.read().strip())')" = hello ] \
     && pass "bridge: stdin passes through" || fail "bridge: stdin passes through"
+# The REAL working directory (getcwd), not $PWD: node/uv crash if it's unreachable
+[ "$(cd "$HOME" && python3 -c 'import os; print(os.getcwd())' 2>&1)" = "$HOME" ] \
+    && pass "bridge: working directory is real (getcwd)" || fail "bridge: working directory (getcwd)"
 [ "$(MY_TEST_VAR=42 python3 -c 'import os; print(os.environ.get("MY_TEST_VAR"))')" = 42 ] \
     && pass "bridge: environment variables pass through" || fail "bridge: environment variables pass through"
 [ "$(env -i HOME="$HOME" "$HOST_BIN/bash" -lc 'echo ok' 2>/dev/null)" = ok ] \
     && pass "bridge: login shell works from an empty environment" || fail "bridge: login shell from an empty environment"
 if grep -qE '^[[:space:]]*TOOLBOX=[^[:space:]]' "$HOME/.config/claude-desktop-flatpak/settings.conf" 2>/dev/null; then
     host-run true </dev/null >/dev/null 2>&1          # first call finds the toolbox
-    s=$(date +%s%N); host-run true </dev/null >/dev/null 2>&1; ms=$(( ($(date +%s%N) - s) / 1000000 ))
-    [ "$ms" -lt 150 ] && pass "speed: a toolbox command takes ${ms} ms (fast path)" \
+    s=$(date +%s%N); out=$(host-run echo ok </dev/null 2>&1); ms=$(( ($(date +%s%N) - s) / 1000000 ))
+    [ "$out" = ok ] && [ "$ms" -lt 150 ] && pass "speed: a toolbox command takes ${ms} ms (fast path)" \
         || fail "speed: toolbox command" "${ms} ms (fast path not used?)"
 fi
 out=$(script -qec 'bash -c "tty"' /dev/null 2>/dev/null | tr -d '\r\0')

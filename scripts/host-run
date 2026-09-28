@@ -128,8 +128,11 @@ if [ -n "$ns" ] && ! started; then
 fi
 if [ -n "$ns" ] && started; then
     while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done <"$job"; rm -f "$job"
-    exec "$ns" -t "$pid" -U -m --wd="$dir" -- setpriv --reuid="$u" --regid="$g" --init-groups \
-        --inh-caps=-all -- "$@"
+    # Change directory only once inside: `nsenter --wd` opens it on the host
+    # side, which leaves a working directory the toolbox cannot resolve.
+    # (No apostrophes anywhere in FAST: it is one single-quoted string.)
+    exec "$ns" -t "$pid" -U -m -- setpriv --reuid="$u" --regid="$g" --init-groups \
+        --inh-caps=-all -- env -C "$dir" PWD="$dir" "$@"
 fi
 # Fallback: the universal (slower) way through `toolbox run`
 exec bash --norc --noprofile -c "$launch" launch "$box" "$watchdog" "$job" "$@"'
