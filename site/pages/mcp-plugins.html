@@ -1,0 +1,52 @@
+<p>Flatpak apps live in a sandbox that normally can't see your <code>node</code>, <code>python</code> or
+<code>docker</code>. This Flatpak includes a bridge, so <strong>every local MCP server and every Claude Code
+command runs with your real tools</strong> – on the host, or inside a toolbox – with no changes to the
+configs you already use.</p>
+
+<h2>Where the config lives</h2>
+<pre><code>~/.var/app/io.github.musmandev092.ClaudeDesktop/config/Claude/claude_desktop_config.json</code></pre>
+<p>Or open it from Claude: <em>Settings → Developer → Edit Config</em>.</p>
+
+<h2>Examples</h2>
+<pre><code>{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/you/Projects"]
+    },
+    "time": { "command": "uvx", "args": ["mcp-server-time"] },
+    "github": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "…" }
+    }
+  }
+}</code></pre>
+<p>API keys in <code>env</code> reach the server, and never appear in the process list.</p>
+
+<h2>Host or toolbox</h2>
+<p>By default commands run on your host. To run them in a toolbox (recommended on Silverblue, Kinoite,
+Bazzite), put this in <code>~/.config/claude-desktop-flatpak/settings.conf</code> and restart Claude:</p>
+<pre><code>TOOLBOX=dev</code></pre>
+<p>For one server in a different toolbox, or a command given by absolute path, use <code>host-run</code>:</p>
+<pre><code>"command": "host-run",
+"args": ["--toolbox", "other-box", "/home/you/.local/bin/my-mcp-server"]</code></pre>
+
+<h2>Claude Code</h2>
+<p>Claude Code sessions, its shell commands and the built-in terminal use the same bridge: your login shell,
+your <code>git</code> config and SSH keys, your language runtimes. Nothing needs to be installed inside the
+Flatpak.</p>
+
+<h2>Troubleshooting</h2>
+<ul>
+<li><strong>“command not found” for a tool you just installed:</strong> restart Claude – the list of commands
+  is refreshed at start.</li>
+<li><strong>A server hangs on start:</strong> run the same command in a terminal (in the toolbox if you use one)
+  to see its error; the first <code>npx -y</code> run downloads packages and can take a while on slow internet.</li>
+<li><strong>Logs:</strong> <code>~/.var/app/io.github.musmandev092.ClaudeDesktop/config/Claude/logs/mcp*.log</code></li>
+</ul>
+
+<h2>Performance</h2>
+<p>A command reaches your toolbox in about 40 ms, and messages between Claude and a running MCP server
+take well under a millisecond. The bridge is tested with 10,000 generated scenarios per release –
+binary data, 16 MB pipes, 80 parallel commands, signals and broken settings.</p>

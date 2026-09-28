@@ -14,13 +14,19 @@ This Flatpak runs the same official app everywhere else, with everything working
 - ✅ Atomic/immutable desktops: plugins can run inside your **toolbox**
 - ✅ Automatic updates, hours after Anthropic releases a new version
 
+📖 **Website and step-by-step guides:** [Fedora](https://musmandev092.github.io/claude-desktop-flatpak-for-linux/fedora/) ·
+[Silverblue / Kinoite / Bazzite / Bluefin](https://musmandev092.github.io/claude-desktop-flatpak-for-linux/fedora-silverblue/) ·
+[Arch / Manjaro / CachyOS](https://musmandev092.github.io/claude-desktop-flatpak-for-linux/arch-linux/) ·
+[Cowork on Linux](https://musmandev092.github.io/claude-desktop-flatpak-for-linux/cowork-linux/) ·
+[MCP servers & Claude Code](https://musmandev092.github.io/claude-desktop-flatpak-for-linux/mcp-plugins/)
+
 ## Install Claude Desktop on Fedora, Silverblue, Arch or any Linux
 
 ```sh
 flatpak install --user https://musmandev092.github.io/claude-desktop-flatpak-for-linux/claude-desktop.flatpakref
 ```
 
-Open **Desktop client for Claude** from your app menu, or run:
+Open **Claude** from your app menu, or run:
 
 ```sh
 flatpak run io.github.musmandev092.ClaudeDesktop

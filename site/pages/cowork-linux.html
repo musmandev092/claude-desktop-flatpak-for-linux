@@ -1,0 +1,44 @@
+<p><strong>Cowork</strong> lets Claude work on your files and run long tasks inside a Linux virtual machine.
+On Linux it runs in one of two places:</p>
+<table>
+<tr><th></th><th>Cloud VM (default)</th><th>Local VM (opt-in)</th></tr>
+<tr><td>Where it runs</td><td>Anthropic's servers</td><td>Your PC, with KVM</td></tr>
+<tr><td>Setup</td><td>None</td><td><code>COWORK_LOCAL=on</code></td></tr>
+<tr><td>Needs</td><td>Internet</td><td>KVM, <code>vhost_vsock</code>, ~2–4 GB free RAM</td></tr>
+<tr><td>Your files</td><td>Synced to the folders you choose</td><td>Shared directly with virtiofs</td></tr>
+</table>
+
+<h2>Use Cowork (cloud)</h2>
+<p>Open the Cowork tab, pick a folder, and give Claude a task. Nothing else is needed.</p>
+
+<h2>Run the Cowork VM on your own computer</h2>
+<ol>
+<li>Allow KVM and load the vsock module:
+<pre><code>sudo usermod -aG kvm $USER          # log out and back in afterwards
+sudo modprobe vhost_vsock</code></pre></li>
+<li>Add to <code>~/.config/claude-desktop-flatpak/settings.conf</code>:
+<pre><code>COWORK_LOCAL=on</code></pre></li>
+<li>Restart Claude. The first start downloads the VM image (a few hundred MB).</li>
+</ol>
+<p class="note">What this changes: Cowork's helper talks to its VM over a vsock socket, which Flatpak blocks
+for all apps. With <code>COWORK_LOCAL=on</code> the helper and QEMU run outside the Flatpak sandbox (in a small
+bubblewrap container using the QEMU, OVMF firmware and virtiofsd bundled in the Flatpak). That is why it is
+off by default.</p>
+
+<h2>Check that the local VM runs</h2>
+<pre><code>pgrep -a qemu-system || echo "no VM running"</code></pre>
+
+<h2>Memory and CPU</h2>
+<p>Claude starts the VM when you open a Cowork session – including when the app reopens one you left open –
+and stops it only when you quit Claude. It currently reserves 4 GB and typically uses about 1.4 GB and a few percent
+of one CPU core while idle. To get the memory back, switch to Chat and quit Claude; next time it opens on
+Chat and no VM starts.</p>
+
+<h2>Troubleshooting</h2>
+<ul>
+<li><strong>“Workspace unavailable” / falls back to the cloud:</strong> check <code>COWORK_LOCAL=on</code>,
+  the <code>kvm</code> group (log out and in) and <code>lsmod | grep vhost_vsock</code>.</li>
+<li><strong>Cowork disappeared after an update:</strong> the app starts unpatched if a new Claude version
+  doesn't fit the Cowork patch; the next update restores it.</li>
+<li><strong>Turn Cowork's patch off completely:</strong> <code>COWORK=off</code> runs the untouched app.</li>
+</ul>

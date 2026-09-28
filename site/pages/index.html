@@ -1,0 +1,52 @@
+<p>Anthropic ships the Claude desktop app for Linux only as a <code>.deb</code> for Ubuntu and Debian.
+This free, open-source Flatpak runs <strong>the same official app</strong> on Fedora, Fedora Silverblue,
+Arch, openSUSE and every other x86_64 distribution – with <strong>Claude Code</strong>,
+<strong>all local MCP plugins</strong>, <strong>Cowork</strong> and automatic updates.</p>
+
+<h2>Install Claude Desktop on Linux</h2>
+<pre><code>flatpak install --user @URL@/claude-desktop.flatpakref</code></pre>
+<p>Then open <strong>Claude</strong> from your app menu (or run
+<code>flatpak run io.github.musmandev092.ClaudeDesktop</code>) and sign in with your claude.ai account.
+New Claude versions arrive through <code>flatpak update</code>, GNOME Software or KDE Discover.</p>
+
+<h2>What works</h2>
+<table>
+<tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+<tr><td>Chat, projects, sign-in</td><td class="yes">Works</td><td>Your normal claude.ai account; the <code>claude://</code> login link opens the app</td></tr>
+<tr><td>Claude Code</td><td class="yes">Works</td><td>Uses your real <code>git</code>, <code>node</code>, <code>python</code> – on the host or in a toolbox</td></tr>
+<tr><td>MCP plugins</td><td class="yes">Works</td><td><code>npx</code>, <code>uvx</code>, <code>docker</code>, <code>podman</code> servers with no config changes</td></tr>
+<tr><td>Cowork</td><td class="yes">Works</td><td>Anthropic's cloud VM, or a local KVM virtual machine (opt-in)</td></tr>
+<tr><td>Updates</td><td class="yes">Automatic</td><td>Checked every hour, tested, GPG-signed</td></tr>
+<tr><td>Wayland / X11</td><td class="yes">Both</td><td>GNOME, KDE Plasma and others</td></tr>
+</table>
+
+<h2>Guides for your distribution</h2>
+<ul class="cards">
+<li><a href="fedora/">Fedora Workstation &amp; KDE</a><p>One command, no dnf repositories, no root.</p></li>
+<li><a href="fedora-silverblue/">Silverblue, Kinoite, Bazzite, Bluefin</a><p>No rpm-ostree layering; plugins run in your toolbox.</p></li>
+<li><a href="arch-linux/">Arch, Manjaro, EndeavourOS, CachyOS</a><p>Signed Flatpak with automatic updates.</p></li>
+<li><a href="cowork-linux/">Cowork on Linux</a><p>Cloud VM or a local KVM virtual machine.</p></li>
+<li><a href="mcp-plugins/">MCP servers &amp; Claude Code</a><p>npx, uvx and docker servers, toolboxes, troubleshooting.</p></li>
+</ul>
+
+<h2>Why this Flatpak</h2>
+<ul>
+<li><strong>Built for atomic desktops.</strong> On Silverblue, Kinoite and Bazzite nothing is layered
+  onto the OS; Claude's plugins use the tools in your toolbox.</li>
+<li><strong>Nothing redistributed.</strong> The Claude app is downloaded from <code>downloads.claude.ai</code>
+  on your computer and checked against its SHA-256 checksum.</li>
+<li><strong>Safe updates.</strong> Each new Claude version is built and tested automatically; if Cowork's
+  patch no longer fits, the update waits instead of breaking your app.</li>
+<li><strong>Heavily tested.</strong> Every release runs 10,000 generated edge cases (odd arguments,
+  16 MB pipes, signals, broken settings, corrupted archives) plus real app tests.</li>
+</ul>
+
+<h2>Frequently asked questions</h2>
+@FAQ@
+
+<h2>How it works</h2>
+<p>The Flatpak contains only packaging: a launcher, a bridge that lets the sandboxed app run your own
+commands (through the Flatpak portal, or inside a toolbox), and the QEMU, firmware and virtiofsd that
+Cowork needs. At install time Flatpak fetches Anthropic's official <code>.deb</code> (<em>extra-data</em>),
+verifies it and unpacks it. Read the <a href="https://github.com/musmandev092/claude-desktop-flatpak-for-linux">source
+code and README</a> for every detail.</p>

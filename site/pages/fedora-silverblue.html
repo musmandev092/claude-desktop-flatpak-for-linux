@@ -1,0 +1,42 @@
+<p>On Fedora Atomic desktops – <strong>Silverblue, Kinoite, Sway Atomic, Budgie Atomic</strong> and
+Universal Blue images like <strong>Bazzite, Bluefin and Aurora</strong> – the system is read-only and apps
+should be Flatpaks. This Flatpak runs the official Claude Desktop app there <strong>without rpm-ostree
+layering and without a reboot</strong>, and lets Claude's plugins and Claude Code use the tools in your
+<strong>toolbox</strong>.</p>
+
+<h2>1. Install the app</h2>
+<pre><code>flatpak install --user @URL@/claude-desktop.flatpakref</code></pre>
+<p>Open <strong>Claude</strong> from your app grid and sign in.</p>
+
+<h2>2. Give Claude your developer tools (toolbox)</h2>
+<p>Keep <code>node</code>, <code>uv</code> and <code>git</code> in a toolbox instead of the host:</p>
+<pre><code>toolbox create dev
+toolbox run -c dev sudo dnf install -y nodejs uv git</code></pre>
+<p>Tell the app to use it – create <code>~/.config/claude-desktop-flatpak/settings.conf</code>:</p>
+<pre><code>TOOLBOX=dev</code></pre>
+<p>Restart Claude. Every MCP server and every Claude Code command now runs inside <code>dev</code>, with
+your files, your <code>$PATH</code> and your API keys – and your host stays clean.</p>
+
+<h2>3. Check it</h2>
+<p>In the Code tab, ask Claude to run:</p>
+<pre><code>which node uv git; test -f /run/.toolboxenv &amp;&amp; echo IN-TOOLBOX</code></pre>
+<p>You should see paths from the toolbox and <code>IN-TOOLBOX</code>.</p>
+
+<h2>How the toolbox bridge works</h2>
+<ul>
+<li>At start the app asks your toolbox which commands it has and links each one into the sandbox – no
+  hand-written list, new tools appear after a restart.</li>
+<li>Commands enter the running toolbox directly (about 40 ms each); a stopped toolbox is started first.</li>
+<li>Plugin output stays clean even if your <code>~/.bashrc</code> prints a banner (fastfetch, motd…).</li>
+<li>Use a different toolbox for one plugin with <code>"command": "host-run", "args": ["--toolbox", "other", "server"]</code>.</li>
+</ul>
+
+<h2>Cowork on Silverblue</h2>
+<p>Cowork's cloud VM works immediately. For the local VM, your user needs KVM access:</p>
+<pre><code>sudo usermod -aG kvm $USER    # then log out and back in</code></pre>
+<p>Details in <a href="../cowork-linux/">Cowork on Linux</a>.</p>
+
+<h2>Why not rpm-ostree install?</h2>
+<p>Anthropic's package is a <code>.deb</code>, and layering packages onto an atomic system slows updates and
+can break rebases. A Flatpak is the native way to add apps on Silverblue and Kinoite, and this one updates
+itself like every other Flatpak.</p>

@@ -1,0 +1,33 @@
+<p>Claude Desktop has no official Fedora package – Anthropic only ships a <code>.deb</code> for Ubuntu and
+Debian. On Fedora Workstation and Fedora KDE the easiest way is this Flatpak: Fedora already includes
+Flatpak, you need no root, and no extra <code>dnf</code> repository.</p>
+
+<h2>1. Install</h2>
+<pre><code>flatpak install --user @URL@/claude-desktop.flatpakref</code></pre>
+<p>Flatpak asks to add the Flathub repository for the runtime if you don't have it yet – answer yes.
+It then downloads the official Claude app from Anthropic, checks it and sets it up.</p>
+
+<h2>2. Open Claude and sign in</h2>
+<p>Open <strong>Claude</strong> from Activities (GNOME) or the application launcher (KDE), and sign in with
+your claude.ai account. The sign-in link from your browser opens the app automatically.</p>
+
+<h2>3. Claude Code and MCP plugins</h2>
+<p>On Fedora Workstation plugins run directly on your system, so install the tools they need as usual:</p>
+<pre><code>sudo dnf install nodejs uv git</code></pre>
+<p>Then add servers to Claude's config exactly as the official docs describe – <code>"command": "npx"</code>
+just works. See the <a href="../mcp-plugins/">MCP servers guide</a> for examples.</p>
+
+<h2>4. Cowork (optional)</h2>
+<p>Cowork works out of the box with Anthropic's cloud VM. To run its VM on your own PC, see
+<a href="../cowork-linux/">Cowork on Linux</a>.</p>
+
+<h2>Updates and removal</h2>
+<pre><code>flatpak update                                        # new Claude versions
+flatpak uninstall --user io.github.musmandev092.ClaudeDesktop   # remove</code></pre>
+<p>Your chats live in your claude.ai account; local settings are in
+<code>~/.var/app/io.github.musmandev092.ClaudeDesktop/</code>.</p>
+
+<h2>Flatpak or RPM?</h2>
+<p>Community RPMs also exist for Fedora. The Flatpak keeps the app separate from your system, gets new
+Claude versions within about an hour, and works the same on Fedora Atomic desktops – if you use
+<a href="../fedora-silverblue/">Silverblue or Kinoite</a>, it is the option that needs no layering.</p>

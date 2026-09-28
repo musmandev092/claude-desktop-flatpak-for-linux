@@ -1,0 +1,32 @@
+<p>Claude Desktop has no official Arch Linux package. This Flatpak installs Anthropic's official Linux build
+on <strong>Arch Linux, Manjaro, EndeavourOS, CachyOS, Garuda</strong> and other Arch-based systems, keeps it
+sandboxed, and updates it automatically.</p>
+
+<h2>1. Install Flatpak (once)</h2>
+<pre><code>sudo pacman -S --needed flatpak</code></pre>
+<p>Log out and back in once so the app appears in your menu. Manjaro, EndeavourOS and CachyOS often
+include Flatpak already.</p>
+
+<h2>2. Install Claude Desktop</h2>
+<pre><code>flatpak install --user @URL@/claude-desktop.flatpakref</code></pre>
+<p>Answer yes if Flatpak offers to add Flathub (needed for the runtime). Open <strong>Claude</strong> from
+your launcher and sign in.</p>
+
+<h2>3. Plugins and Claude Code</h2>
+<p>Plugins run on your system with your own tools:</p>
+<pre><code>sudo pacman -S --needed nodejs npm uv git</code></pre>
+<p>Your MCP servers work unchanged – see the <a href="../mcp-plugins/">MCP servers guide</a>.
+Prefer to keep them in a container? Install <code>toolbox</code> (<code>sudo pacman -S toolbox</code>), create
+one, and set <code>TOOLBOX=name</code> as in the <a href="../fedora-silverblue/">atomic guide</a>.</p>
+
+<h2>4. Cowork</h2>
+<p>Cowork works with Anthropic's cloud VM. For the local VM you need KVM and the <code>vhost_vsock</code>
+module:</p>
+<pre><code>sudo usermod -aG kvm $USER
+sudo modprobe vhost_vsock</code></pre>
+<p>See <a href="../cowork-linux/">Cowork on Linux</a>.</p>
+
+<h2>Flatpak or AUR?</h2>
+<p>Community AUR packages exist too. The Flatpak runs the exact official build without repackaging it,
+isolates it from your system, and gets new Claude versions within about an hour through
+<code>flatpak update</code>.</p>

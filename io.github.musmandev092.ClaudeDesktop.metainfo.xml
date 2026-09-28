@@ -22,6 +22,12 @@
     </p>
   </description>
 
+  <keywords>
+    <keyword>Claude</keyword><keyword>Claude Code</keyword><keyword>AI</keyword>
+    <keyword>Anthropic</keyword><keyword>MCP</keyword><keyword>Cowork</keyword>
+    <keyword>Assistant</keyword><keyword>LLM</keyword>
+  </keywords>
+  <url type="help">https://musmandev092.github.io/claude-desktop-flatpak-for-linux/</url>
   <launchable type="desktop-id">io.github.musmandev092.ClaudeDesktop.desktop</launchable>
   <url type="homepage">https://github.com/musmandev092/claude-desktop-flatpak-for-linux</url>
   <url type="bugtracker">https://github.com/musmandev092/claude-desktop-flatpak-for-linux/issues</url>

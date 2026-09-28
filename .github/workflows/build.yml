@@ -78,22 +78,23 @@ jobs:
             --title="Claude Desktop for Linux (unofficial)" --default-branch=master --prune
           rm -rf "$GNUPGHOME"
 
-      - name: Assemble site
+      - name: Build website (SEO pages, sitemap, llms.txt, IndexNow key)
         if: github.ref == 'refs/heads/main'
+        env:
+          # Optional: set these as repository *variables* after verifying the site
+          GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
+          BING_SITE_VERIFICATION: ${{ vars.BING_SITE_VERIFICATION }}
+          YANDEX_VERIFICATION: ${{ vars.YANDEX_VERIFICATION }}
         run: |
-          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST")
+          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST" | head -1)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          mkdir -p _site
-          cp -r repo _site/repo
           GPGKEY=$(gpg --dearmor < keys/flatpak-repo-public.asc | base64 --wrap=0)
-          sed -e "s|@GPGKEY@|$GPGKEY|" -e "s|@URL@|$PAGES_URL|g" site/claude-desktop.flatpakrepo > _site/claude-desktop.flatpakrepo
-          sed -e "s|@GPGKEY@|$GPGKEY|" -e "s|@URL@|$PAGES_URL|g" site/claude-desktop.flatpakref > _site/claude-desktop.flatpakref
-          sed -e "s|@VERSION@|$VERSION|g" -e "s|@URL@|$PAGES_URL|g" site/index.html > _site/index.html
-          sed -e "s|@URL@|$PAGES_URL|g" site/robots.txt > _site/robots.txt
-          sed -e "s|@URL@|$PAGES_URL|g" -e "s|@DATE@|$(date -u +%F)|" site/sitemap.xml > _site/sitemap.xml
+          python3 site/build.py --out _site --url "$PAGES_URL" --version "$VERSION" --gpgkey "$GPGKEY"
+          cp -r repo _site/repo
           cp keys/flatpak-repo-public.asc _site/
           cp "$(flatpak info --user --show-location "$APP_ID")/files/share/icons/hicolor/256x256/apps/$APP_ID.png" _site/icon.png
           touch _site/.nojekyll
+          python3 tests/check-site.py _site "$PAGES_URL"
           # Safety: never publish Anthropic's software
           ! find _site -name '*.deb' -o -name '*.asar' | grep .
 
@@ -106,6 +107,26 @@ jobs:
       - name: Deploy to GitHub Pages
         if: github.ref == 'refs/heads/main'
         uses: actions/deploy-pages@v4
+
+      # IndexNow tells Bing (and so DuckDuckGo, Yahoo, Ecosia), Yandex, Seznam,
+      # Naver and Yep that pages changed. Google does not use IndexNow: it reads
+      # the sitemap submitted in Search Console.
+      - name: Notify search engines (IndexNow)
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        run: |
+          key=$(basename _site/????????????????????????????????.txt .txt)
+          python3 - "$key" <<'PY'
+          import json, sys, urllib.request
+          key = sys.argv[1]
+          base = "${{ env.PAGES_URL }}"
+          urls = [u for u in open("_site/indexnow-urls.txt").read().split() if u]
+          body = json.dumps({"host": base.split("/")[2], "key": key,
+                             "keyLocation": f"{base}/{key}.txt", "urlList": urls}).encode()
+          req = urllib.request.Request("https://api.indexnow.org/indexnow", data=body,
+                                       headers={"Content-Type": "application/json; charset=utf-8"})
+          print("IndexNow:", urllib.request.urlopen(req, timeout=30).status, len(urls), "URLs")
+          PY
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
