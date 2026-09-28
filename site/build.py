@@ -13,12 +13,14 @@ import datetime
 import html
 import json
 import os
+import re
 import shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = "https://github.com/musmandev092/claude-desktop-flatpak-for-linux"
 APP_ID = "io.github.musmandev092.ClaudeDesktop"
 # IndexNow key: public by design (search engines fetch it to confirm the pings are ours)
+VERIFY_FILE = re.compile(r"google[0-9a-f]{16}\.html|BingSiteAuth\.xml|yandex_[0-9a-f]{16}\.html")
 INDEXNOW_KEY = "5c3f0e9b8a7d46e1b2c4f6a8d0e2b4c6"  # gitleaks:allow (public by design)
 
 # slug, nav label, <title>, meta description, H1
@@ -249,6 +251,10 @@ Source: {REPO} (MIT)
             f.write(text.replace("@URL@", url).replace("@GPGKEY@", a.gpgkey))
     for static in ("style.css", "social.png"):
         shutil.copy(os.path.join(HERE, static), a.out)
+    # search engine ownership files (Google, Bing, Yandex) go to the site root as they are
+    for name in os.listdir(HERE):
+        if VERIFY_FILE.fullmatch(name):
+            shutil.copy(os.path.join(HERE, name), a.out)
     print(f"built {len(PAGES)} pages into {a.out}")
 
 

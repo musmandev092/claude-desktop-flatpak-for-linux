@@ -71,6 +71,8 @@ def main(out, url):
         for name in sorted(files):
             if not name.endswith(".html"):
                 continue
+            if re.fullmatch(r"google[0-9a-f]{16}\.html|yandex_[0-9a-f]{16}\.html", name):
+                continue                      # search engine ownership files, not pages
             path = os.path.join(root, name)
             html = open(path, encoding="utf-8").read()
             p = Page()
