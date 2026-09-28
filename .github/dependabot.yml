@@ -1,0 +1,10 @@
+# Keeps the pinned GitHub Actions current. Each update is a pull request that
+# the Build workflow tests; dependabot-merge.yml merges it when the build passes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"

@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = "https://github.com/musmandev092/claude-desktop-flatpak-for-linux"
 APP_ID = "io.github.musmandev092.ClaudeDesktop"
 # IndexNow key: public by design (search engines fetch it to confirm the pings are ours)
-INDEXNOW_KEY = "5c3f0e9b8a7d46e1b2c4f6a8d0e2b4c6"
+INDEXNOW_KEY = "5c3f0e9b8a7d46e1b2c4f6a8d0e2b4c6"  # gitleaks:allow (public by design)
 
 # slug, nav label, <title>, meta description, H1
 PAGES = [
@@ -53,6 +53,11 @@ PAGES = [
      "Use every local MCP server (npx, uvx, docker) and Claude Code with your real tools in the Claude "
      "Desktop Flatpak – on the host or in a toolbox.",
      "MCP servers and Claude Code in the Flatpak"),
+    ("trust", "How releases are made",
+     "How Claude Desktop Flatpak releases are made and verified",
+     "Every release is built, tested, signed and published by GitHub Actions in public, with no human "
+     "step. See the process and verify a release yourself.",
+     "How releases are made – and how to verify them"),
 ]
 
 
@@ -111,6 +116,8 @@ def page(slug, label, title, desc, h1, body, url, version, today, verify, root=N
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{canonical}">

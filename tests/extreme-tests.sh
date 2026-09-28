@@ -96,7 +96,7 @@ set_conf TOOLBOX=dev
 
 echo "── Launching the app in unusual ways ──"
 launch 25
-first=$RUNNING
+: "first launch ran: $RUNNING"
 flatpak run "$APP_ID" >/dev/null 2>&1; rc=$?
 sleep 3
 n=$(pgrep -f '/app/extra/claude-desktop.*/claude-desktop$' | wc -l)

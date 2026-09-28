@@ -1,0 +1,46 @@
+# Merges Dependabot's pull requests (updates of the pinned GitHub Actions)
+# once every check on the pull request's exact commit has passed.
+#
+# Runs on a schedule from main: it never checks out or runs pull request code,
+# and it asks the GitHub API who opened the pull request (not the branch name).
+name: Merge tested Dependabot updates
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: dependabot-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge passing Dependabot pull requests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # merging a pull request writes to main
+      pull-requests: write     # to merge the pull request
+      checks: read             # to read the check results of its commit
+    steps:
+      - name: Merge the ones whose checks all passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.user.login == "dependabot[bot]") | "\(.number) \(.head.sha)"' |
+          while read -r pr sha; do
+            checks=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" \
+                     --jq '[.check_runs[] | {name, status, conclusion}]')
+            build_ok=$(jq -r '[.[] | select(.name == "Build and test" and .conclusion == "success")] | length' <<<"$checks")
+            not_done=$(jq -r '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length' <<<"$checks")
+            if [ "$build_ok" -ge 1 ] && [ "$not_done" -eq 0 ]; then
+              echo "PR #$pr: all checks passed on $sha – merging"
+              gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$sha"
+            else
+              echo "PR #$pr: not ready (build passed: $build_ok, pending/failed checks: $not_done)"
+            fi
+          done

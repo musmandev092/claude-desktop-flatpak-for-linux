@@ -15,6 +15,7 @@ set -u
 trap 'rm -f "${job:-}"; exit 129' HUP
 trap 'rm -f "${job:-}"; exit 130' INT
 trap 'rm -f "${job:-}"; exit 143' TERM
+umask 077                                # job files carry API keys: private
 
 # Some callers start us with an almost empty environment (e.g. Claude Code
 # reading your login shell). flatpak-spawn still needs the session bus.
@@ -71,7 +72,7 @@ fi
 # Everything we have (API keys from the MCP config, etc.), except variables
 # that only make sense inside the sandbox. It goes through a private file in
 # "env -0" format: no size limit, and secrets never show up in `ps`.
-mkdir -p -m 700 "$RUN_DIR"
+mkdir -p "$RUN_DIR" && chmod 700 "$RUN_DIR"          # private: job files hold API keys
 find "$RUN_DIR" -name 'job.*' -mmin +1440 -delete 2>/dev/null   # leftovers of killed jobs
 job=$(mktemp -p "$RUN_DIR" job.XXXXXXXX)
 while IFS= read -r -d '' kv; do
@@ -115,6 +116,10 @@ if [ -z "$TOOLBOX" ]; then
         exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
     fi
     # Pipes: --watch-bus stops the command when Claude exits
+    # Claude gives plugins a socket as stdin. Bash reads ~/.bashrc when its stdin is
+    # a socket, so a plugin that is itself `bash -c ...` would print your banner
+    # into its JSON. A pipe in between avoids that.
+    if [ -S /dev/stdin ]; then exec < <(exec cat 2>/dev/null); fi   # (cat holds nothing but the pipe)
     exec 3<"$job"; rm -f "$job"
     # Nothing left to clean up: drop the traps, because bash loses a signal
     # that is still pending when it execs (the command would never see it)
@@ -139,7 +144,7 @@ fi
 # ~/.bashrc. The toolbox's PID is cached; a stopped toolbox is started first.
 # If anything is unusual (no nsenter/setpriv, odd container), it falls back to
 # the slower `toolbox run` way below.
-FAST='trap "rm -f \"\$job\"; exit 129" HUP; trap "rm -f \"\$job\"; exit 130" INT; trap "rm -f \"\$job\"; exit 143" TERM
+FAST='umask 077; trap "rm -f \"\$job\"; exit 129" HUP; trap "rm -f \"\$job\"; exit 130" INT; trap "rm -f \"\$job\"; exit 143" TERM
 box=$1 dir=$2 cache=$3 job=$4 launch=$5 watchdog=$6; shift 6
 u=$(id -u) g=$(id -g) ns=$(command -v nsenter)
 started() { [ -n "${pid:-}" ] && [ -n "${start:-}" ] &&
@@ -187,7 +192,7 @@ exec bash --norc --noprofile -c "$launch" launch "$box" "$watchdog" "$job"'
 #   - writes the command's output to a private pipe ($job.out), because
 #     `toolbox run` starts a login shell whose banners (fastfetch, motd…)
 #     would otherwise mix into the output and break plugins' JSON.
-WATCHDOG='p=$1 job=$2; shift 2
+WATCHDOG='umask 077; p=$1 job=$2; shift 2
 x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=("$kv"); done < "$job"; rm -f "$job"
 # The command comes from a file: `toolbox run` would turn bytes that are not
 # valid UTF-8 into U+FFFD
@@ -211,7 +216,7 @@ exit "$s"'
 
 # Runs on the host. Forwards signals straight to the command's PID, reports
 # the saved exit code and cleans up.
-LAUNCH='box=$1 wd=$2 job=$3; shift 3
+LAUNCH='umask 077; box=$1 wd=$2 job=$3; shift 3
 trap '"'"'kill -TERM "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' TERM INT
 trap '"'"'kill -HUP "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' HUP
 mkfifo -m 600 "$job.out"
@@ -227,6 +232,10 @@ exit "$r"'
 
 # The environment goes as an open file (fd 3), and the file is deleted right
 # away: nothing is left behind even if the command is stopped at once.
+# Claude gives plugins a socket as stdin. Bash reads ~/.bashrc when its stdin is
+# a socket, so a plugin that is itself `bash -c ...` would print your banner
+# into its JSON. A pipe in between avoids that.
+if [ -S /dev/stdin ]; then exec < <(exec cat 2>/dev/null); fi   # (cat holds nothing but the pipe)
 exec 3<"$job"; rm -f "$job"
 trap - HUP INT TERM                    # (see host mode above)
 exec flatpak-spawn --host --watch-bus --forward-fd=3 --directory="$dir" bash --norc --noprofile -c "$FAST" \

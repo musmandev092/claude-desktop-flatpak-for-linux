@@ -37,8 +37,12 @@ New Claude versions arrive through <code>flatpak update</code>, GNOME Software o
   on your computer and checked against its SHA-256 checksum.</li>
 <li><strong>Safe updates.</strong> Each new Claude version is built and tested automatically; if Cowork's
   patch no longer fits, the update waits instead of breaking your app.</li>
-<li><strong>Heavily tested.</strong> Every release runs 10,000 generated edge cases (odd arguments,
-  16 MB pipes, signals, broken settings, corrupted archives) plus real app tests.</li>
+<li><strong>No human in the release process.</strong> Every release is found, built, tested, signed and
+  published by GitHub Actions in public, with a build record you can verify –
+  <a href="trust/">see how</a>.</li>
+<li><strong>Heavily tested.</strong> Every release is install-tested and security-scanned in CI; the
+  plugin bridge is additionally tested with 10,000 generated edge cases (odd arguments, 16 MB pipes,
+  signals, broken settings, corrupted archives) and 20 security tests on a real desktop.</li>
 </ul>
 
 <h2>Frequently asked questions</h2>

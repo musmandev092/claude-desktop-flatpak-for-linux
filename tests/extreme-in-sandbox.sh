@@ -2,7 +2,7 @@
 # Stress and edge-case checks that run INSIDE the sandbox.
 # Started by tests/extreme-tests.sh. Prints PASS / FAIL / SKIP lines.
 set -u
-cd "$HOME"
+cd "$HOME" || exit 1
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1${2:+  — $2}"; }
 skip() { echo "SKIP  $1${2:+  — $2}"; }

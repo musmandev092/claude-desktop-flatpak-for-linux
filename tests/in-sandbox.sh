@@ -2,7 +2,7 @@
 # Checks that run INSIDE the Flatpak sandbox. Started by tests/run-tests.sh.
 # Prints one line per check: PASS / FAIL / SKIP.
 set -u
-cd "$HOME"
+cd "$HOME" || exit 1
 
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1${2:+  — $2}"; }

@@ -105,9 +105,9 @@ sudo usermod -aG kvm $USER   # then log out and back in
   Flatpak cannot provide. At install time a copy of `app.asar` gets two same-length
   path strings changed (`/usr/...` → `/app/...`). The original is kept; if the patch
   doesn't apply or the app fails to start, it falls back to the original automatically.
-- **Updates:** a GitHub Action checks Anthropic's apt repository every hour, opens a
-  pull request, builds and tests it (including a Cowork canary), and publishes a
-  GPG-signed Flatpak repository to GitHub Pages.
+- **Updates:** every hour GitHub Actions checks Anthropic's apt repository; a new
+  version is built, install-tested (including a Cowork canary) and security-scanned,
+  and only then committed, GPG-signed and published to GitHub Pages – see below.
 
 ## Security note
 
@@ -126,6 +126,33 @@ flatpak remote-add --user --no-gpg-verify claude-local repo
 flatpak install --user claude-local io.github.musmandev092.ClaudeDesktop
 ```
 
+## How releases are made – no human step
+
+Everything runs in public on GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)):
+
+| Job | Runs | Can it publish? |
+|---|---|---|
+| **Check** | every hour: new Claude / OVMF version? | no – read-only |
+| **Build and test** | builds from this repo, installs like a user, Cowork canary | no – read-only, no secrets |
+| **Security checks** | gitleaks (whole history), zizmor, actionlint, ShellCheck | no – read-only |
+| **Sign and publish** | only on `main`, only if all of the above passed: commit the update as `github-actions[bot]`, GPG-sign, deploy, attest, release | yes |
+
+Nobody builds a release on their own computer. If a new Claude version breaks
+anything, nothing is published and the failed run stays public. Actions and
+containers are pinned to exact commits/digests; Dependabot updates them and its
+pull requests are merged only when every check passed on the exact commit.
+
+**Verify a release yourself:**
+
+```sh
+curl -sO https://musmandev092.github.io/claude-desktop-flatpak-for-linux/BUILDINFO.json
+gh attestation verify BUILDINFO.json -R musmandev092/claude-desktop-flatpak-for-linux
+flatpak info io.github.musmandev092.ClaudeDesktop | grep Commit   # = flatpak_commit in BUILDINFO.json
+```
+
+Signing key: `633C 2A74 A8C7 B2A4 F67D  AC05 F6E3 C4A7 C815 B241`
+([public key](keys/flatpak-repo-public.asc)). See also [SECURITY.md](SECURITY.md).
+
 ## Tests
 
 Run against the installed app (close Claude first):
@@ -143,6 +170,17 @@ against what should happen, with latency/throughput numbers and leak checks.
 tests/fuzz-tests.sh                 # 10,000 scenarios (a different set: --seed N)
 tests/fuzz-tests.sh --only 1234     # replay one scenario exactly
 tests/fuzz-tests.sh --fallback      # force the slower `toolbox run` path
+```
+
+Security tests (Claude may stay open): shellshock-style environment variables and
+injected arguments never run, API keys in job files stay private (0600 in a 0700
+folder) and are never left behind, toolbox names cannot pick another container,
+a user's `~/.bashrc` cannot leak into a plugin's output, and the published
+repository rejects a wrong signing key.
+
+```sh
+tests/security-tests.sh             # 20 checks
+tests/lint-scripts.sh               # every script (and every script embedded in host-run) parses
 ```
 
 | Area | Scenarios | What is generated |

@@ -1,20 +1,26 @@
-# Build, test and (on main) publish the Flatpak repository to GitHub Pages.
+# Everything that makes a release, with no human in the loop:
+#
+#   every hour   check   → is there a new Claude (or OVMF) version?      read-only
+#   then         build   → build the Flatpak and test it like a user    read-only, no secrets
+#   then         publish → commit the update, sign, deploy, attest,     only on main,
+#                          release                                       only if build passed
+#
+# Pull requests run check-free build+test only. Every run's log is public.
 name: Build
 
 on:
-  pull_request:
+  schedule:
+    - cron: "17 * * * *"          # hourly update check
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write   # create the GitHub Release
-  pages: write      # deploy the Flatpak repo
-  id-token: write   # required by actions/deploy-pages
+permissions: {}                    # nothing by default; each job asks for what it needs
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   APP_ID: io.github.musmandev092.ClaudeDesktop
@@ -22,16 +28,76 @@ env:
   PAGES_URL: https://musmandev092.github.io/claude-desktop-flatpak-for-linux
 
 jobs:
-  build:
+  # ── 1. Is there a new upstream version? ──────────────────────────────────────
+  check:
+    name: Check for a new Claude version
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read           # read the manifest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Edits the manifest (URL, sha256, size) and the metainfo <release> in
+      # place; commits nothing. The build job below tests the result.
+      - name: Check Anthropic's and Debian's repositories
+        uses: docker://ghcr.io/flathub/flatpak-external-data-checker@sha256:58cbad601261c2ebaae2e18b6f639c09aa5809ef941dcff7284f68928ebb790d
+        with:
+          args: --edit-only --require-important-update io.github.musmandev092.ClaudeDesktop.yaml
+
+      - name: Anything new?
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "No new version."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --stat
+            git diff
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Keep the updated files for the next jobs
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update
+          path: |
+            io.github.musmandev092.ClaudeDesktop.yaml
+            io.github.musmandev092.ClaudeDesktop.metainfo.xml
+          retention-days: 7
+
+  # ── 2. Build and test, exactly like a user installs it ──────────────────────
+  build:
+    name: Build and test
+    needs: check
+    # scheduled runs only build when something changed; pushes, PRs and manual runs always do
+    if: >-
+      !cancelled() && needs.check.result != 'failure' &&
+      (github.event_name != 'schedule' || needs.check.outputs.changed == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read           # read the source; no secrets in this job
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae # freedesktop-25.08
       options: --privileged
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use the updated manifest
+        if: needs.check.outputs.changed == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: update
 
       - name: Build
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           manifest-path: ${{ env.MANIFEST }}
           repo-dir: repo
@@ -43,6 +109,9 @@ jobs:
         run: |
           flatpak-builder-lint manifest "$MANIFEST" || true   # report only: Flathub-only rules don't apply to us
           appstreamcli validate --no-net "$APP_ID.metainfo.xml"
+
+      - name: Lint scripts
+        run: tests/lint-scripts.sh
 
       # Install exactly like a user would: this downloads Claude from Anthropic,
       # checks the sha256 and runs apply_extra (including the Cowork patch).
@@ -57,69 +126,203 @@ jobs:
           echo "Claude version: $(cat "$extra/claude-version")"
           echo "Cowork patch: $(cat "$extra/cowork-status")"
 
-      # Canary: if a new Claude version breaks the Cowork patch, fail here so
-      # the update PR is NOT auto-merged and users keep the working version.
+      # Canary: if a new Claude version breaks the Cowork patch, fail here, so
+      # nothing is published and users keep the last working version.
       - name: Cowork canary
         run: |
           extra="$(flatpak info --user --show-location "$APP_ID")/files/extra"
           grep -qx enabled "$extra/cowork-status"
           ! cmp -s "$extra/claude-desktop/resources/app.asar" "$extra/claude-desktop-orig/resources/app.asar"
 
+      - name: Keep the built repository for the publish job
+        run: |
+          mkdir -p out
+          cp "$(flatpak info --user --show-location "$APP_ID")/files/share/icons/hicolor/256x256/apps/$APP_ID.png" out/icon.png
+          tar -cf out/repo.tar repo
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build
+          path: out/
+          retention-days: 7
+
+  # ── 2b. Security checks (public, on every build) ────────────────────────────
+  security:
+    name: Security checks
+    needs: check
+    if: >-
+      !cancelled() && needs.check.result != 'failure' &&
+      (github.event_name != 'schedule' || needs.check.outputs.changed == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read           # read the source and its history
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0       # the whole history, for the secret scan
+
+      - name: No secrets anywhere in the git history (gitleaks)
+        uses: docker://docker.io/zricethezav/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb # v8.30.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: "*"
+        with:
+          args: git . --no-banner --redact --exit-code 1
+
+      - name: Workflow security (zizmor, strictest persona)
+        run: pipx run zizmor==1.30.1 --offline --persona=auditor --format=plain .github/workflows/
+
+      - name: Workflow correctness (actionlint)
+        uses: docker://docker.io/rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+        with:
+          args: -no-color
+
+      - name: Shell scripts (shellcheck)
+        run: shellcheck -S warning scripts/host-run scripts/claude-desktop.sh scripts/apply_extra.sh scripts/cowork-helper-shim tests/*.sh
+
+  # ── 3. Publish: only main, only after build passed ──────────────────────────
+  publish:
+    name: Sign and publish
+    needs: [check, build, security]
+    if: >-
+      !cancelled() && needs.build.result == 'success' && needs.security.result == 'success' &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the tested update commit, create the release
+      pages: write           # deploy the site and the Flatpak repository
+      id-token: write        # Pages deployment + build provenance
+      attestations: write    # build provenance anyone can verify
+    environment:
+      name: github-pages
+      url: ${{ env.PAGES_URL }}/
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae # freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # the push below passes the token itself
+
+      - name: Use the updated manifest
+        if: needs.check.outputs.changed == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: update
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build
+          path: out
+
+      # The update was tested by the build job above: record it in git
+      # (public history), as the github-actions bot.
+      - name: Commit the tested update
+        if: needs.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST" | head -1)
+          git add "$MANIFEST" "$APP_ID.metainfo.xml"
+          git commit -m "Update Claude Desktop to $VERSION" \
+                     -m "Found, built and tested automatically by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:main
+
       - name: Sign repository
-        if: github.ref == 'refs/heads/main'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
           GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
         run: |
-          export GNUPGHOME="$(mktemp -d)"
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_KEY_ID" ]; then
+            echo "::error::The FLATPAK_GPG_PRIVATE_KEY / FLATPAK_GPG_KEY_ID secrets are not set"
+            exit 1
+          fi
+          tar -xf out/repo.tar
+          GNUPGHOME=$(mktemp -d)
+          export GNUPGHOME
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
           flatpak build-sign repo "$APP_ID" master --gpg-sign="$GPG_KEY_ID" --gpg-homedir="$GNUPGHOME"
           flatpak build-update-repo repo --gpg-sign="$GPG_KEY_ID" --gpg-homedir="$GNUPGHOME" \
             --title="Claude Desktop for Linux (unofficial)" --default-branch=master --prune
-          rm -rf "$GNUPGHOME"
 
-      - name: Build website (SEO pages, sitemap, llms.txt, IndexNow key)
-        if: github.ref == 'refs/heads/main'
+      - name: Build website (SEO pages, sitemap, llms.txt, build record)
         env:
           # Optional: set these as repository *variables* after verifying the site
           GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
           BING_SITE_VERIFICATION: ${{ vars.BING_SITE_VERIFICATION }}
           YANDEX_VERIFICATION: ${{ vars.YANDEX_VERIFICATION }}
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST" | head -1)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           GPGKEY=$(gpg --dearmor < keys/flatpak-repo-public.asc | base64 --wrap=0)
           python3 site/build.py --out _site --url "$PAGES_URL" --version "$VERSION" --gpgkey "$GPGKEY"
           cp -r repo _site/repo
           cp keys/flatpak-repo-public.asc _site/
-          cp "$(flatpak info --user --show-location "$APP_ID")/files/share/icons/hicolor/256x256/apps/$APP_ID.png" _site/icon.png
+          cp out/icon.png _site/icon.png
           touch _site/.nojekyll
+          # The public record of this build: what was built, from what, by which run
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          m = open(os.environ["MANIFEST"]).read()
+          deb = re.search(r"url: (https://downloads\.claude\.ai/\S+\.deb)\s+sha256: (\w+)\s+size: (\d+)", m)
+          ostree = subprocess.run(["ostree", "--repo=repo", "rev-parse",
+                                   f"app/{os.environ['APP_ID']}/x86_64/master"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          info = {
+              "app_id": os.environ["APP_ID"],
+              "claude_version": os.environ["VERSION"],
+              "flatpak_commit": ostree,
+              "source_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                                              text=True, check=True).stdout.strip(),
+              "built_by": run,
+              "trigger": os.environ["GITHUB_EVENT_NAME"],
+              "claude_deb": {"url": deb.group(1), "sha256": deb.group(2), "size": int(deb.group(3))},
+              "signing_key_fingerprint": "633C2A74A8C7B2A4F67DAC05F6E3C4A7C815B241",  # gitleaks:allow (public key)
+              "human_involved": False,
+          }
+          json.dump(info, open("_site/BUILDINFO.json", "w"), indent=2)
+          print(json.dumps(info, indent=2))
+          PY
           python3 tests/check-site.py _site "$PAGES_URL"
           # Safety: never publish Anthropic's software
           ! find _site -name '*.deb' -o -name '*.asar' | grep .
 
+      # Signed statement from GitHub: "these files were built by this workflow,
+      # from this commit". Check it:  gh attestation verify BUILDINFO.json -R OWNER/REPO
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            _site/BUILDINFO.json
+            _site/claude-desktop.flatpakref
+            _site/claude-desktop.flatpakrepo
+
       - name: Upload Pages artifact
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
       - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
       # IndexNow tells Bing (and so DuckDuckGo, Yahoo, Ecosia), Yandex, Seznam,
-      # Naver and Yep that pages changed. Google does not use IndexNow: it reads
-      # the sitemap submitted in Search Console.
+      # Naver and Yep that pages changed. Google reads the sitemap instead.
       - name: Notify search engines (IndexNow)
-        if: github.ref == 'refs/heads/main'
         continue-on-error: true
         run: |
-          key=$(basename _site/????????????????????????????????.txt .txt)
-          python3 - "$key" <<'PY'
-          import json, sys, urllib.request
-          key = sys.argv[1]
-          base = "${{ env.PAGES_URL }}"
+          python3 - <<'PY'
+          import glob, json, os, urllib.request
+          key = os.path.basename(glob.glob("_site/" + "[0-9a-f]" * 32 + ".txt")[0])[:-4]
+          base = os.environ["PAGES_URL"]
           urls = [u for u in open("_site/indexnow-urls.txt").read().split() if u]
           body = json.dumps({"host": base.split("/")[2], "key": key,
                              "keyLocation": f"{base}/{key}.txt", "urlList": urls}).encode()
@@ -129,18 +332,29 @@ jobs:
           PY
 
       - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "Release v$VERSION already exists"
-          else
-            gh release create "v$VERSION" _site/claude-desktop.flatpakref \
-              --title "Claude Desktop $VERSION" \
-              --notes "Packages Claude Desktop $VERSION (downloaded from Anthropic at install time; no Anthropic software is included here).
-
-          Install: \`flatpak install --user $PAGES_URL/claude-desktop.flatpakref\`
-          Update: \`flatpak update\`"
+            exit 0
           fi
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "Claude Desktop $VERSION for Linux, as a Flatpak. Found, built, tested, signed and"
+            echo "published automatically by [this workflow run]($RUN) – no human step."
+            echo
+            echo "Install: \`flatpak install --user $PAGES_URL/claude-desktop.flatpakref\`"
+            echo "Update: \`flatpak update\`"
+            echo
+            echo "Build record (also on the website as BUILDINFO.json, with a GitHub attestation):"
+            echo '```json'
+            cat _site/BUILDINFO.json
+            echo '```'
+            echo "Verify: \`gh attestation verify BUILDINFO.json -R $GITHUB_REPOSITORY\`"
+            echo
+            echo "The Claude app is downloaded from Anthropic at install time; no Anthropic software is included here."
+          } > notes.md
+          gh release create "v$VERSION" _site/claude-desktop.flatpakref _site/BUILDINFO.json \
+            --title "Claude Desktop $VERSION" --notes-file notes.md

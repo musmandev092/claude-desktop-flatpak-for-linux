@@ -1,0 +1,59 @@
+<p>Every release of this Flatpak is found, built, tested, signed and published by
+<strong>GitHub Actions, in public, with no human step</strong>. Nobody builds a release on their own
+computer, and every run's log is public. This page shows what happens and how you can check it yourself.</p>
+
+<h2>What happens every hour, automatically</h2>
+<ol>
+<li><strong>Check</strong> – a job asks Anthropic's official apt repository (and Debian, for the VM firmware)
+  whether there is a new version. It only reads.</li>
+<li><strong>Build and test</strong> – the Flatpak is built from this public repository and installed exactly
+  like a user would: Flatpak downloads Claude from <code>downloads.claude.ai</code>, checks its SHA-256,
+  unpacks it and applies the Cowork patch. This job has <em>no secrets</em>.</li>
+<li><strong>Security checks</strong> – the whole git history is scanned for leaked secrets (gitleaks), the
+  workflows are audited (zizmor, actionlint) and every shell script is checked (ShellCheck).</li>
+<li><strong>Publish</strong> – only if all of that passed, and only on the main branch: the update is
+  committed by the <code>github-actions</code> bot, the repository is GPG-signed, the website and Flatpak
+  repository are deployed, GitHub records a signed <em>build provenance attestation</em>, and a release is
+  created with the full build record.</li>
+</ol>
+<p>If a new Claude version breaks anything – for example the Cowork patch no longer fits – nothing is
+published and everyone keeps the last working version. The failed run stays visible.</p>
+
+<h2>What people did (once, at setup)</h2>
+<ul>
+<li>Wrote the packaging code, which is public in the repository with its full history.</li>
+<li>Created the GPG signing key and stored it as an encrypted GitHub secret. Only the publish job can use
+  it, and only after the tests passed.</li>
+</ul>
+<p>Pinned tools are kept current by Dependabot pull requests, which are merged automatically only when
+every check passes on the exact commit.</p>
+
+<h2>Check a release yourself</h2>
+<h3>1. It was built by this repository's workflow</h3>
+<pre><code>curl -sO @URL@/BUILDINFO.json
+gh attestation verify BUILDINFO.json -R musmandev092/claude-desktop-flatpak-for-linux</code></pre>
+<p>GitHub confirms which workflow run, commit and repository produced the file.</p>
+
+<h3>2. Your installed app is that build</h3>
+<pre><code>flatpak info io.github.musmandev092.ClaudeDesktop | grep Commit
+grep flatpak_commit BUILDINFO.json</code></pre>
+<p>Both show the same commit. Flatpak only installs it if the GPG signature matches key
+<code>633C 2A74 A8C7 B2A4 F67D  AC05 F6E3 C4A7 C815 B241</code>.</p>
+
+<h3>3. Claude itself came from Anthropic</h3>
+<pre><code>grep -A2 claude_deb BUILDINFO.json</code></pre>
+<p>The URL is Anthropic's own repository, and the SHA-256 is checked by Flatpak on your computer before
+anything is installed.</p>
+
+<h3>4. Read every step</h3>
+<p>All runs, with their full logs, are public on the
+<a href="https://github.com/musmandev092/claude-desktop-flatpak-for-linux/actions">Actions page</a>. Each
+release links the run that made it.</p>
+
+<h2>What stays your decision</h2>
+<ul>
+<li><code>COWORK=off</code> runs the Claude app completely unmodified.</li>
+<li><code>COWORK_LOCAL=on</code> (off by default) runs the Cowork VM outside the Flatpak sandbox.</li>
+<li>Plugins and Claude Code run your own commands on your host or in your toolbox – that is what they
+  are for, so the sandbox is intentionally open for them.</li>
+</ul>
