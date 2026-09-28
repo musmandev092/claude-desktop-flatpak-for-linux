@@ -39,6 +39,12 @@ check "bridge: exit code passes through" bash -c '[ "$(bash -c "exit 7"; echo $?
     && pass "bridge: environment variables pass through" || fail "bridge: environment variables pass through"
 [ "$(env -i HOME="$HOME" "$HOST_BIN/bash" -lc 'echo ok' 2>/dev/null)" = ok ] \
     && pass "bridge: login shell works from an empty environment" || fail "bridge: login shell from an empty environment"
+if grep -qE '^[[:space:]]*TOOLBOX=[^[:space:]]' "$HOME/.config/claude-desktop-flatpak/settings.conf" 2>/dev/null; then
+    host-run true </dev/null >/dev/null 2>&1          # first call finds the toolbox
+    s=$(date +%s%N); host-run true </dev/null >/dev/null 2>&1; ms=$(( ($(date +%s%N) - s) / 1000000 ))
+    [ "$ms" -lt 150 ] && pass "speed: a toolbox command takes ${ms} ms (fast path)" \
+        || fail "speed: toolbox command" "${ms} ms (fast path not used?)"
+fi
 out=$(script -qec 'bash -c "tty"' /dev/null 2>/dev/null | tr -d '\r\0')
 case "$out" in *"/dev/pts/"*) pass "bridge: terminal gets a real pty";; *) fail "bridge: terminal gets a real pty" "$out";; esac
 

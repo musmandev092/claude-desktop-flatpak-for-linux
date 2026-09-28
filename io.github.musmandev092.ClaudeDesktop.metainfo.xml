@@ -4,8 +4,8 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary=https://www.anthropic.com/legal/consumer-terms</project_license>
 
-  <name>Desktop client for Claude (unofficial)</name>
-  <summary>Run the official Claude desktop app on any Linux</summary>
+  <name>Claude</name>
+  <summary>Desktop application for Claude.ai (unofficial Flatpak)</summary>
   <developer id="io.github.musmandev092">
     <name>Muhammad Usman</name>
   </developer>
@@ -14,7 +14,7 @@
     <p>
       An unofficial Flatpak of Anthropic's Claude desktop app. It downloads the
       official release directly from Anthropic when you install it and verifies
-      its checksum. No Anthropic software is redistributed by this project.
+      its checksum. The app itself is not redistributed by this project.
     </p>
     <p>
       This project is not affiliated with, endorsed by, or supported by Anthropic.

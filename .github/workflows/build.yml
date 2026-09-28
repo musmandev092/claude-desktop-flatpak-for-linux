@@ -92,7 +92,7 @@ jobs:
           sed -e "s|@URL@|$PAGES_URL|g" site/robots.txt > _site/robots.txt
           sed -e "s|@URL@|$PAGES_URL|g" -e "s|@DATE@|$(date -u +%F)|" site/sitemap.xml > _site/sitemap.xml
           cp keys/flatpak-repo-public.asc _site/
-          cp "icons/$APP_ID.svg" _site/icon.svg
+          cp "$(flatpak info --user --show-location "$APP_ID")/files/share/icons/hicolor/256x256/apps/$APP_ID.png" _site/icon.png
           touch _site/.nojekyll
           # Safety: never publish Anthropic's software
           ! find _site -name '*.deb' -o -name '*.asar' | grep .

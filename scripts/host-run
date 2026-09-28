@@ -96,10 +96,43 @@ fi
 
 # ── Inside a toolbox ─────────────────────────────────────────────────────────
 if [ -t 0 ] && [ -t 1 ]; then
-    # A terminal: foreground with a real pty (closing the pty ends the command)
+    # A terminal: foreground with a real pty (closing the pty ends the command).
+    # `toolbox run` gives it a terminal the toolbox can see.
     exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM \
         toolbox run -c "$TOOLBOX" bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
 fi
+
+# Pipes (MCP servers, Claude Code commands):
+# FAST PATH (runs on the host): step straight into the toolbox's namespaces
+# with nsenter, like `podman exec` does but ~10x quicker (~40 ms instead of
+# ~300 ms per command). The command then is a normal child of flatpak-spawn:
+# stdio, exit code and signals pass through untouched, and nothing reads
+# ~/.bashrc. The toolbox's PID is cached; a stopped toolbox is started first.
+# If anything is unusual (no nsenter/setpriv, odd container), it falls back to
+# the slower `toolbox run` way below.
+FAST='box=$1 dir=$2 cache=$3 job=$4 launch=$5 watchdog=$6; shift 6
+u=$(id -u) g=$(id -g) ns=$(command -v nsenter)
+started() { [ -n "${pid:-}" ] && [ "$(cut -d" " -f22 "/proc/$pid/stat" 2>/dev/null)" = "$start" ]; }
+read -r pid start 2>/dev/null <"$cache"
+if [ -n "$ns" ] && ! started; then
+    [ "$(podman inspect -f "{{.State.Running}}" "$box" 2>/dev/null)" = true ] ||
+        toolbox run -c "$box" true </dev/null >/dev/null 2>&1
+    pid=$(podman inspect -f "{{.State.Pid}}" "$box" 2>/dev/null)
+    start=$(cut -d" " -f22 "/proc/$pid/stat" 2>/dev/null)
+    if started && "$ns" -t "$pid" -U -m -- setpriv --reuid="$u" --regid="$g" --init-groups \
+            --inh-caps=-all -- true </dev/null >/dev/null 2>&1; then
+        echo "$pid $start" >"$cache.$$" && mv -f "$cache.$$" "$cache"
+    else
+        pid=
+    fi
+fi
+if [ -n "$ns" ] && started; then
+    while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null; done <"$job"; rm -f "$job"
+    exec "$ns" -t "$pid" -U -m --wd="$dir" -- setpriv --reuid="$u" --regid="$g" --init-groups \
+        --inh-caps=-all -- "$@"
+fi
+# Fallback: the universal (slower) way through `toolbox run`
+exec bash --norc --noprofile -c "$launch" launch "$box" "$watchdog" "$job" "$@"'
 
 # Runs inside the toolbox (which sees host PIDs). Loads the environment,
 # starts the command, and:
@@ -138,5 +171,5 @@ wait "$o"
 rm -f "$job" "$job.pid" "$job.status" "$job.out"
 exit "$r"'
 
-exec flatpak-spawn --host --watch-bus --directory="$dir" \
-    bash --norc --noprofile -c "$LAUNCH" launch "$TOOLBOX" "$WATCHDOG" "$job" "$@"
+exec flatpak-spawn --host --watch-bus --directory="$dir" bash --norc --noprofile -c "$FAST" \
+    fast "$TOOLBOX" "$dir" "$RUN_DIR/$TOOLBOX.nspid" "$job" "$LAUNCH" "$WATCHDOG" "$@"

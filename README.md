@@ -86,7 +86,9 @@ sudo usermod -aG kvm $USER   # then log out and back in
 ## How it works — and why it's legal
 
 - This repository contains **only packaging files** (MIT licence). It does **not**
-  contain or redistribute any Anthropic software.
+  contain or redistribute the Claude app. The only Anthropic file in the published
+  Flatpak is Claude's icon, taken from the official `.deb` at build time so the app
+  looks right in your menu.
 - When you install, Flatpak downloads the **official** `.deb` directly from
   `downloads.claude.ai` and verifies its SHA-256 checksum (Flatpak *extra-data*).
 - **Plugin bridge:** every command on your host (or toolbox) is linked into the

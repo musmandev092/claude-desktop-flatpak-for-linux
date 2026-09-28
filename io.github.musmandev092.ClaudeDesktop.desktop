@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=Desktop client for Claude (unofficial)
+Name=Claude
 GenericName=AI Assistant
-Comment=Unofficial Flatpak of the Claude desktop app
+Comment=Desktop application for Claude.ai
 Keywords=AI;Chat;Assistant;Claude;Code;LLM;
 Exec=claude-desktop %U
 Icon=io.github.musmandev092.ClaudeDesktop
 StartupNotify=true
 StartupWMClass=io.github.musmandev092.ClaudeDesktop
 SingleMainWindow=true
-Categories=Development;
+Categories=Utility;Development;
 MimeType=x-scheme-handler/claude;
 Actions=NewChat;NewCode;
 
