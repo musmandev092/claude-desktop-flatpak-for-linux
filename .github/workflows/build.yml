@@ -10,7 +10,9 @@ name: Build
 
 on:
   schedule:
-    - cron: "17 * * * *"          # hourly update check
+    # GitHub delays and drops scheduled runs (hourly ran only every ~6 h),
+    # so ask often to get at least one check an hour
+    - cron: "7,22,37,52 * * * *"  # update check
   push:
     branches: [main]
   pull_request:
