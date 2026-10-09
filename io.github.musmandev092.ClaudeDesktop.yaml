@@ -153,9 +153,9 @@ modules:
       # Anthropic's official .deb, downloaded on the USER's machine at install time
       - type: extra-data
         filename: claude-desktop.deb
-        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.26454.2_amd64.deb
-        sha256: b251a0224a8635874f33598df8ed8952b427f84815ee59580cc022d6bdb2430f
-        size: 180943856
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.31226.0_amd64.deb
+        sha256: eb86fda7c8073117b29f2e9022da5ffd398b8f125e331d7d5956e9ba0e3bd6d4
+        size: 181244372
         only-arches:
           - x86_64
         x-checker-data:
@@ -168,8 +168,8 @@ modules:
       # The same .deb again, only to take Claude's icon from it when building
       - type: file
         dest-filename: claude-icons.deb
-        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.26454.2_amd64.deb
-        sha256: b251a0224a8635874f33598df8ed8952b427f84815ee59580cc022d6bdb2430f
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.31226.0_amd64.deb
+        sha256: eb86fda7c8073117b29f2e9022da5ffd398b8f125e331d7d5956e9ba0e3bd6d4
         only-arches:
           - x86_64
         x-checker-data:
