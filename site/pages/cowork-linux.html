@@ -1,0 +1,30 @@
+<p><strong>Cowork</strong> lets Claude work on your files and run long tasks for you. In this Flatpak it
+works with no setup.</p>
+
+<h2>Where Cowork runs</h2>
+<p>Since October 6, 2026, Anthropic runs new Cowork tasks for <strong>Pro and Max</strong> plans on
+<strong>its own servers</strong>, on every platform (<a href="https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile">Anthropic's notice</a>). Tasks keep
+going when you close the app or your laptop.</p>
+
+<h2>Use it</h2>
+<ol>
+<li>Open the <strong>Cowork</strong> tab.</li>
+<li>Connect a folder and give Claude a task.</li>
+</ol>
+<p>Your folders stay on your computer. While the app is open, Claude reaches the folders you connected
+through it and fetches a copy of only the file a task needs.</p>
+
+<h2>No local VM in this Flatpak</h2>
+<p>Earlier versions of this Flatpak bundled QEMU, UEFI firmware and virtiofsd to run Cowork's virtual machine
+on your PC. Pro and Max plans can no longer start local Cowork tasks, so that stack is gone: the
+download is smaller, nothing in the Claude app is patched, and the sandbox only gets your GPU (no
+<code>/dev/kvm</code>). Old <code>COWORK=</code> and <code>COWORK_LOCAL=</code> lines in
+<code>settings.conf</code> are ignored and can be deleted.</p>
+
+<h2>Troubleshooting</h2>
+<ul>
+<li><strong>Claude can't read a folder:</strong> keep the app open while the task runs, and make sure the
+  folder is connected in the Cowork tab. The Flatpak can read your home folder.</li>
+<li><strong>Cowork tab missing:</strong> Cowork depends on your plan and on Anthropic's rollout, not on
+  this Flatpak.</li>
+</ul>

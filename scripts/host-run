@@ -1,0 +1,242 @@
+#!/bin/bash
+# host-run: run a command OUTSIDE the Flatpak sandbox — on the host, or inside
+# a toolbox — so Claude's plugins (MCP servers) and Claude Code can use your
+# real tools (node, npx, uvx, docker, git, ...).
+#
+# It is called in two ways:
+#   1. Through a link named after a command (e.g. host-bin/npx -> host-run).
+#      Then it runs that same command outside.
+#   2. Directly:  host-run [--toolbox NAME | --host] COMMAND [ARGS...]
+#      (useful in MCP configs that use an absolute path, or another toolbox).
+set -u
+# Traps first: bash drops a Ctrl-C (SIGINT) that arrives while it waits for a
+# helper command that then exits normally ("cooperative exit"), so they must be
+# in place before any helper runs. They also delete a not-yet-used job file.
+trap 'rm -f "${job:-}"; exit 129' HUP
+trap 'rm -f "${job:-}"; exit 130' INT
+trap 'rm -f "${job:-}"; exit 143' TERM
+umask 077                                # job files carry API keys: private
+
+# Some callers start us with an almost empty environment (e.g. Claude Code
+# reading your login shell). flatpak-spawn still needs the session bus.
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=/run/flatpak/bus}"
+: "${FLATPAK_ID:=io.github.musmandev092.ClaudeDesktop}"
+export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+
+CONF="$HOME/.config/claude-desktop-flatpak/settings.conf"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.var/app/$FLATPAK_ID/cache}/host-bridge"
+# Same path on the host, in toolboxes and in the sandbox; private to us
+RUN_DIR="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-run"
+
+# Where to run: TOOLBOX=<name> in settings.conf, or empty for the host itself.
+# The last `[export] TOOLBOX=...` line wins; quotes and spaces are ignored
+# (host-bridge reads it the same way). Only a regular file is read, so a
+# broken settings.conf can never make this hang.
+TOOLBOX=
+if [ -f "$CONF" ] && [ -r "$CONF" ]; then
+    TOOLBOX=$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?TOOLBOX=//p' "$CONF" 2>/dev/null |
+              tail -n1 | tr -d "\"'[:space:]\000")
+fi
+
+name=${0##*/}
+if [ "$name" = "host-run" ]; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --toolbox) TOOLBOX=${2:-}; shift 2 ;;
+            --host)    TOOLBOX=""; shift ;;
+            --)        shift; break ;;
+            *)         break ;;
+        esac
+    done
+    if [ $# -eq 0 ]; then
+        echo "usage: host-run [--toolbox NAME | --host] COMMAND [ARGS...]" >&2
+        exit 2
+    fi
+else
+    set -- "$name" "$@"
+fi
+# A toolbox name is letters, digits, "_", "." and "-", not starting with "-".
+# Anything else (e.g. "--latest") could make podman pick a different container.
+case "$TOOLBOX" in
+    ""|[A-Za-z0-9]*) case "$TOOLBOX" in *[!A-Za-z0-9_.-]*) bad=1 ;; *) bad= ;; esac ;;
+    *) bad=1 ;;
+esac
+if [ -n "$bad" ]; then
+    echo "host-run: invalid toolbox name '$TOOLBOX' (check TOOLBOX= in $CONF)" >&2
+    exit 125
+fi
+
+# ── Environment to pass along ───────────────────────────────────────────────
+# Everything we have (API keys from the MCP config, etc.), except variables
+# that only make sense inside the sandbox. It goes through a private file in
+# "env -0" format: no size limit, and secrets never show up in `ps`.
+mkdir -p "$RUN_DIR" && chmod 700 "$RUN_DIR"          # private: job files hold API keys
+find "$RUN_DIR" -name 'job.*' -mmin +1440 -delete 2>/dev/null   # leftovers of killed jobs
+job=$(mktemp -p "$RUN_DIR" job.XXXXXXXX)
+while IFS= read -r -d '' kv; do
+    case "${kv%%=*}" in
+        *PATH|LD_*|FLATPAK_*|DBUS_*|XDG_DATA_DIRS|XDG_CONFIG_DIRS|XDG_*_HOME|\
+        container|GIO_*|GST_*|GDK_*|GTK_*|GSETTINGS_*|PYTHON*|ZYPAK_*|CHROME_*|\
+        ELECTRON_*|SHELL|SHLVL|PWD|OLDPWD|_|HOST_BIN|BASH_FUNC_*) continue ;;
+    esac
+    # Values pointing into the sandbox (/run/flatpak/..., /app/...) are useless outside
+    case "${kv#*=}" in
+        */run/flatpak/*|/app/*) continue ;;
+    esac
+    printf '%s\0' "$kv"
+done < <(env -0) > "$job"
+# The real PATH of the host/toolbox (saved by host-bridge), so tools in
+# ~/.local/bin, npm globals, etc. are found
+if [ -s "$CACHE_DIR/${TOOLBOX:-host}.path" ]; then
+    printf 'PATH=%s\0' "$(cat "$CACHE_DIR/${TOOLBOX:-host}.path")" >> "$job"
+fi
+
+# The working directory must exist outside too; the sandbox's /tmp and /app don't.
+case "$PWD" in
+    "$HOME"|"$HOME"/*|/run/user/*|/media/*|/mnt/*|/var/home/*) dir=$PWD ;;
+    *) dir=$HOME ;;
+esac
+
+# Many commands starting at the same moment (Claude starts all MCP servers at
+# once) can overflow the session bus proxy's queue. A 10 ms gap between
+# connections prevents that.
+{ flock 9; sleep 0.01; } 9>"$RUN_DIR/.lock"
+
+# Loads the env file given as $0, deletes it, then runs the command
+# (names bash cannot export, like "my-key", are passed through `env` instead)
+LOAD_ENV='x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=("$kv"); done < "$0"; rm -f "$0"
+[ ${#x[@]} -gt 0 ] && set -- env "${x[@]}" "$@"; exec "$@"'
+
+# ── On the host ──────────────────────────────────────────────────────────────
+if [ -z "$TOOLBOX" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+        # A terminal: host-spawn gives the command a real pseudo-terminal (pty)
+        exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
+    fi
+    # Pipes: --watch-bus stops the command when Claude exits
+    # Claude gives plugins a socket as stdin. Bash reads ~/.bashrc when its stdin is
+    # a socket, so a plugin that is itself `bash -c ...` would print your banner
+    # into its JSON. A pipe in between avoids that.
+    if [ -S /dev/stdin ]; then exec < <(exec cat 2>/dev/null); fi   # (cat holds nothing but the pipe)
+    exec 3<"$job"; rm -f "$job"
+    # Nothing left to clean up: drop the traps, because bash loses a signal
+    # that is still pending when it execs (the command would never see it)
+    trap - HUP INT TERM
+    # (through sh, so a missing command gives 127 and a non-executable one 126)
+    exec flatpak-spawn --host --watch-bus --directory="$dir" --env-fd=3 /bin/sh -c 'exec "$@"' sh "$@"
+fi
+
+# ── Inside a toolbox ─────────────────────────────────────────────────────────
+if [ -t 0 ] && [ -t 1 ]; then
+    # A terminal: foreground with a real pty (closing the pty ends the command).
+    # `toolbox run` gives it a terminal the toolbox can see.
+    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM \
+        toolbox run -c "$TOOLBOX" bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
+fi
+
+# Pipes (MCP servers, Claude Code commands):
+# FAST PATH (runs on the host): step straight into the toolbox's namespaces
+# with nsenter, like `podman exec` does but ~10x quicker (~40 ms instead of
+# ~300 ms per command). The command then is a normal child of flatpak-spawn:
+# stdio, exit code and signals pass through untouched, and nothing reads
+# ~/.bashrc. The toolbox's PID is cached; a stopped toolbox is started first.
+# If anything is unusual (no nsenter/setpriv, odd container), it falls back to
+# the slower `toolbox run` way below.
+FAST='umask 077; trap "rm -f \"\$job\"; exit 129" HUP; trap "rm -f \"\$job\"; exit 130" INT; trap "rm -f \"\$job\"; exit 143" TERM
+box=$1 dir=$2 cache=$3 job=$4 launch=$5 watchdog=$6; shift 6
+u=$(id -u) g=$(id -g) ns=$(command -v nsenter)
+started() { [ -n "${pid:-}" ] && [ -n "${start:-}" ] &&
+            [ "$(cut -d" " -f22 "/proc/$pid/stat" 2>/dev/null)" = "$start" ]; }
+pid= start=
+[ -f "$cache" ] && read -r pid start 2>/dev/null <"$cache"
+case "$pid$start" in *[!0-9]*) pid= ;; esac
+[ ${#pid} -le 10 ] && [ ${#start} -le 20 ] || pid=
+if [ -n "$ns" ] && ! started; then
+    [ "$(podman inspect -f "{{.State.Running}}" "$box" 2>/dev/null)" = true ] ||
+        toolbox run -c "$box" true </dev/null >/dev/null 2>&1
+    pid=$(podman inspect -f "{{.State.Pid}}" "$box" 2>/dev/null)
+    case "$pid" in
+        ""|0|*[!0-9]*) echo "host-run: toolbox \"$box\" not found or cannot start" >&2
+                       rm -f "$job"; exit 125 ;;
+    esac
+    start=$(cut -d" " -f22 "/proc/$pid/stat" 2>/dev/null)
+    if started && "$ns" -t "$pid" -U -m -- setpriv --reuid="$u" --regid="$g" --init-groups \
+            --inh-caps=-all -- true </dev/null >/dev/null 2>&1; then
+        [ -d "$cache" ] && [ ! -L "$cache" ] && rm -rf "$cache"
+        echo "$pid $start" >"$cache.$$" && mv -f "$cache.$$" "$cache"
+    else
+        pid=
+    fi
+fi
+if [ -n "$ns" ] && started; then
+    x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=("$kv"); done <&3; exec 3<&-
+    trap - HUP INT TERM
+    # Change directory only once inside: `nsenter --wd` opens it on the host
+    # side, which leaves a working directory the toolbox cannot resolve.
+    # sh gives the usual 127 / 126 for a missing / non-executable command.
+    # (No apostrophes anywhere in FAST: it is one single-quoted string.)
+    exec "$ns" -t "$pid" -U -m -- setpriv --reuid="$u" --regid="$g" --init-groups \
+        --inh-caps=-all -- env "${x[@]}" /bin/sh -c "cd -- \"\$0\" || exit 125; exec \"\$@\"" "$dir" "$@"
+fi
+# Fallback: the universal (slower) way through `toolbox run` (needs the file)
+cat <&3 >"$job"; exec 3<&-; printf "%s\0" "$@" >"$job.args"
+exec bash --norc --noprofile -c "$launch" launch "$box" "$watchdog" "$job"'
+
+# Runs inside the toolbox (which sees host PIDs). Loads the environment,
+# starts the command, and:
+#   - stops the command if the host side ($1) disappears (Claude exited),
+#   - forwards SIGTERM/SIGINT/SIGHUP,
+#   - saves the real exit code, because `toolbox run` turns 127 into 0,
+#   - writes the command's output to a private pipe ($job.out), because
+#     `toolbox run` starts a login shell whose banners (fastfetch, motd…)
+#     would otherwise mix into the output and break plugins' JSON.
+WATCHDOG='umask 077; p=$1 job=$2; shift 2
+x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=("$kv"); done < "$job"; rm -f "$job"
+# The command comes from a file: `toolbox run` would turn bytes that are not
+# valid UTF-8 into U+FFFD
+if [ -f "$job.args" ]; then
+    set --; while IFS= read -r -d "" a; do set -- "$@" "$a"; done < "$job.args"; rm -f "$job.args"
+fi
+[ ${#x[@]} -gt 0 ] && set -- env "${x[@]}" "$@"
+"$@" <&0 >"$job.out" & c=$!
+echo "$c" > "$job.pid"
+( while kill -0 "$p" 2>/dev/null; do sleep 2; done
+  kill -TERM "$c" 2>/dev/null; sleep 3; kill -KILL "$c" 2>/dev/null ) </dev/null >/dev/null 2>&1 & m=$!
+# A background command ignores Ctrl-C (SIGINT) and nothing can undo that from
+# a script, so Ctrl-C is passed on as SIGTERM
+trap '"'"'kill -TERM "$c" 2>/dev/null'"'"' TERM INT; trap '"'"'kill -HUP "$c" 2>/dev/null'"'"' HUP
+while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || break; done
+kill "$m" 2>/dev/null
+echo "$s" > "$job.status"
+# Host side already gone (Claude was killed): nobody else will clean up
+kill -0 "$p" 2>/dev/null || rm -f "$job.out" "$job.pid" "$job.status"
+exit "$s"'
+
+# Runs on the host. Forwards signals straight to the command's PID, reports
+# the saved exit code and cleans up.
+LAUNCH='umask 077; box=$1 wd=$2 job=$3; shift 3
+trap '"'"'kill -TERM "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' TERM INT
+trap '"'"'kill -HUP "$(cat "$job.pid" 2>/dev/null)" 2>/dev/null'"'"' HUP
+mkfifo -m 600 "$job.out"
+cat "$job.out" & o=$!                    # the command'"'"'s real output
+toolbox run -c "$box" bash --norc --noprofile -c "$wd" watchdog "$$" "$job" "$@" <&0 >/dev/null & t=$!
+while :; do wait "$t"; r=$?; kill -0 "$t" 2>/dev/null || break; done
+# If the command never started, nobody opened the pipe: unblock cat
+kill -0 "$o" 2>/dev/null && ! [ -s "$job.pid" ] && : >"$job.out"
+wait "$o"
+[ -s "$job.status" ] && r=$(cat "$job.status")
+rm -f "$job" "$job.args" "$job.pid" "$job.status" "$job.out"
+exit "$r"'
+
+# The environment goes as an open file (fd 3), and the file is deleted right
+# away: nothing is left behind even if the command is stopped at once.
+# Claude gives plugins a socket as stdin. Bash reads ~/.bashrc when its stdin is
+# a socket, so a plugin that is itself `bash -c ...` would print your banner
+# into its JSON. A pipe in between avoids that.
+if [ -S /dev/stdin ]; then exec < <(exec cat 2>/dev/null); fi   # (cat holds nothing but the pipe)
+exec 3<"$job"; rm -f "$job"
+trap - HUP INT TERM                    # (see host mode above)
+exec flatpak-spawn --host --watch-bus --forward-fd=3 --directory="$dir" bash --norc --noprofile -c "$FAST" \
+    fast "$TOOLBOX" "$dir" "$RUN_DIR/$TOOLBOX.nspid" "$job" "$LAUNCH" "$WATCHDOG" "$@"

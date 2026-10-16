@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.musmandev092.ClaudeDesktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary=https://www.anthropic.com/legal/consumer-terms</project_license>
+
+  <name>Claude</name>
+  <summary>Desktop application for Claude.ai (unofficial Flatpak)</summary>
+  <developer id="io.github.musmandev092">
+    <name>Muhammad Usman</name>
+  </developer>
+
+  <description>
+    <p>
+      An unofficial Flatpak of Anthropic's Claude desktop app. It downloads the
+      official release directly from Anthropic when you install it and verifies
+      its checksum. The app itself is not redistributed by this project, and it
+      runs unmodified. Claude Code and local MCP plugins use your own tools;
+      Cowork runs in Anthropic's cloud.
+    </p>
+    <p>
+      This project is not affiliated with, endorsed by, or supported by Anthropic.
+      Claude is a trademark of Anthropic, PBC.
+    </p>
+  </description>
+
+  <keywords>
+    <keyword>Claude</keyword><keyword>Claude Code</keyword><keyword>AI</keyword>
+    <keyword>Anthropic</keyword><keyword>MCP</keyword><keyword>Cowork</keyword>
+    <keyword>Assistant</keyword><keyword>LLM</keyword>
+  </keywords>
+  <url type="help">https://musmandev092.github.io/claude-desktop-flatpak-for-linux/</url>
+  <launchable type="desktop-id">io.github.musmandev092.ClaudeDesktop.desktop</launchable>
+  <url type="homepage">https://github.com/musmandev092/claude-desktop-flatpak-for-linux</url>
+  <url type="bugtracker">https://github.com/musmandev092/claude-desktop-flatpak-for-linux/issues</url>
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="2.42304.0" date="2026-10-15">
+      <description></description>
+    </release>
+  </releases>
+</component>

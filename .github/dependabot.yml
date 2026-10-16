@@ -1,0 +1,14 @@
+# Keeps the pinned GitHub Actions current. All updates come as ONE pull request
+# (so a merged update never leaves a sibling pull request out of date); the
+# Build workflow tests it and dependabot-merge.yml merges it when it passes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"
+    groups:
+      github-actions:
+        patterns: ["*"]

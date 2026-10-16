@@ -1,0 +1,3 @@
+# Values that look like keys but are public on purpose:
+# the IndexNow key must be published on the website (search engines fetch it).
+646daa761291ea8e9218b5839d0f27622bc13c58:site/build.py:generic-api-key:22
