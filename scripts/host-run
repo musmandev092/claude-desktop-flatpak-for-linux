@@ -1,0 +1,106 @@
+#!/bin/bash
+set -u
+if [ ! -e /.flatpak-info ]; then
+    name=${0##*/}
+    case "$name" in
+        host-run|.host-run) echo "host-run: only works inside the Flatpak" >&2; exit 125 ;;
+    esac
+    self=$(cd -P -- "${0%/*}" 2>/dev/null && pwd) || self=
+    path='' IFS=:
+    for d in $PATH; do
+        [ -n "$self" ] && [ "$(cd -P -- "$d" 2>/dev/null && pwd)" = "$self" ] && continue
+        path=$path${path:+:}$d
+    done
+    unset IFS
+    PATH=$path exec "$name" "$@"
+fi
+trap 'rm -f "${job:-}"; exit 129' HUP
+trap 'rm -f "${job:-}"; exit 130' INT
+trap 'rm -f "${job:-}"; exit 143' TERM
+umask 077
+
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/flatpak/bus
+: "${FLATPAK_ID:=io.github.musmandev092.ClaudeDesktop}"
+export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.var/app/$FLATPAK_ID/cache}/host-bridge"
+RUN_DIR="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-run"
+
+name=${0##*/}
+if [ "$name" = "host-run" ]; then
+    [ "${1:-}" = -- ] && shift
+    if [ $# -eq 0 ]; then
+        echo "usage: host-run COMMAND [ARGS...]" >&2
+        exit 2
+    fi
+else
+    set -- "$name" "$@"
+fi
+
+fp=/run/flatpak/app/$FLATPAK_ID
+out=$XDG_RUNTIME_DIR/app/$FLATPAK_ID
+a=(); for x in "$@"; do a+=("${x//"$fp"/"$out"}"); done; set -- "${a[@]}"
+here=$PWD
+case "$here" in "$fp"|"$fp"/*) here=$out${here#"$fp"} ;; esac
+fwd=(); [ -f /dev/fd/3 ] && fwd=(--forward-fd=3)
+
+mkdir -p "$RUN_DIR" && chmod 700 "$RUN_DIR"
+find "$RUN_DIR" -name 'job.*' -mmin +1 -delete 2>/dev/null
+declare -A base=()
+if [ -r "$out/sandbox.env" ]; then
+    while IFS= read -r -d '' kv; do
+        [[ ${kv%%=*} =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && base[${kv%%=*}]=${kv#*=}
+    done < "$out/sandbox.env"
+    [ "${base[FLATPAK_ID]:-}" = "$FLATPAK_ID" ] || base=()
+fi
+envstream() {
+while IFS= read -r -d '' kv; do
+    case "${kv%%=*}" in
+        PATH|LD_*|FLATPAK_*|DBUS_*|XDG_DATA_DIRS|XDG_CONFIG_DIRS|XDG_*_HOME|\
+        container|GIO_*|GST_*|GDK_*|GTK_*|GSETTINGS_*|ZYPAK_*|CHROME_*|\
+        ELECTRON_*|SHELL|SHLVL|PWD|OLDPWD|_|HOST_BIN|BASH_FUNC_*) continue ;;
+        *PATH|PYTHON*|ALSA_*|__EGL_*)
+            [ ${#base[@]} -eq 0 ] && continue
+            [ -n "${base[${kv%%=*}]+set}" ] && [ "${base[${kv%%=*}]}" = "${kv#*=}" ] && continue ;;
+    esac
+    kv=${kv//"$fp"/"$out"}
+    case "${kv#*=}" in
+        */run/flatpak/*|/app/*) continue ;;
+    esac
+    printf '%s\0' "$kv"
+done < <(env -0)
+printf 'SHLVL=1\0'
+if [ -f "$CACHE_DIR/host.path" ] && [ -r "$CACHE_DIR/host.path" ]; then
+    hp=$(<"$CACHE_DIR/host.path")
+    [ -n "$hp" ] && printf 'PATH=%s\0' "$hp"
+fi
+}
+
+case "$here" in
+    /run/user/*|/run/media/*) dir=$here ;;
+    /|/app|/app/*|/usr|/usr/*|/etc|/etc/*|/tmp|/tmp/*|/var/tmp|/var/tmp/*|/var/config|/var/config/*|\
+    /var/data|/var/data/*|/var/cache|/var/cache/*|/var/lib|/var/lib/*|/run|/run/*|/proc|/proc/*|\
+    /sys|/sys/*|/dev|/dev/*) dir=$HOME ;;
+    *) dir=$here ;;
+esac
+
+{ flock 9; sleep 0.01; } 9>"$RUN_DIR/.lock"
+
+LOAD_ENV='x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=("$kv"); done < "$0"; rm -f "$0"
+[ ${#x[@]} -gt 0 ] && set -- env "${x[@]}" "$@"; exec "$@"'
+if [ -t 0 ] && [ -t 1 ]; then
+    job=$(mktemp -p "$RUN_DIR" job.XXXXXXXX) && envstream > "$job" || exit 125
+    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
+fi
+
+exec 5< <(envstream)
+trap - HUP INT TERM
+if [ "${CLAUDE_DESKTOP_RESOLVING_ENVIRONMENT:-}" = 1 ]; then
+    flatpak-spawn --host --watch-bus --directory="$dir" "${fwd[@]}" --env-fd=5 /bin/sh -c 'exec "$@"' sh "$@" |
+        sed -z -E "s#(^|\n)PATH=#\1PATH=$out/host-bin:#"
+    exit "${PIPESTATUS[0]}"
+fi
+exec flatpak-spawn --host --watch-bus --directory="$dir" "${fwd[@]}" --env-fd=5 /bin/sh -c 'exec "$@"' sh "$@"
+

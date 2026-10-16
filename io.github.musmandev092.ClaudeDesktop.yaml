@@ -1,0 +1,101 @@
+id: io.github.musmandev092.ClaudeDesktop
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '25.08'
+command: claude-desktop
+separate-locales: false
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+cleanup-commands:
+  - rm -rf /app/bin/patch-electron-desktop-filename /app/share/locale /app/lib/python3.13
+    /app/lib/girepository-1.0 /app/lib/libunity /app/lib/libunity.so* /app/lib/libdee-1.0.so*
+    /app/lib/libgnome-keyring.so*
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --share=network
+  - --socket=pulseaudio
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Flatpak
+
+modules:
+  - name: host-spawn
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        CGO_ENABLED: '0'
+        GOFLAGS: -mod=vendor
+    build-commands:
+      - GOCACHE="$PWD/.gocache" go build -trimpath -ldflags "-s -w -X main.Version=1.6.2"
+        -o ${FLATPAK_DEST}/bin/host-spawn .
+    sources:
+      - type: git
+        url: https://github.com/1player/host-spawn.git
+        tag: v1.6.2
+        commit: d76c3a5196a8e0943f6a1c7c9f1acde4bd83c40c
+      - type: archive
+        url: https://github.com/1player/host-spawn/releases/download/v1.6.2/host-spawn-vendor.tar.zst
+        sha256: 9abfddf5c1eba0704d643de06988ff3b8cdd2f594bfb4d1c0027315552dad5cc
+
+  - name: claude-desktop
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 apply_extra.sh ${FLATPAK_DEST}/bin/apply_extra
+      - install -Dm755 claude-desktop.sh ${FLATPAK_DEST}/bin/claude-desktop
+      - install -Dm755 host-run ${FLATPAK_DEST}/bin/host-run
+      - install -Dm755 host-bridge ${FLATPAK_DEST}/bin/host-bridge
+      - install -Dm644 ${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - bsdtar -xOf claude-icons.deb 'data.tar.*' | bsdtar -xf - './usr/share/icons/hicolor/*/apps/claude-desktop.png'
+      - for f in usr/share/icons/hicolor/*/apps/claude-desktop.png; do install -Dm644
+        "$f" "${FLATPAK_DEST}/${f#usr/}"; mv "${FLATPAK_DEST}/${f#usr/}" "$(dirname
+        "${FLATPAK_DEST}/${f#usr/}")/${FLATPAK_ID}.png"; done
+      - install -Dm644 ${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+    sources:
+      - type: extra-data
+        filename: claude-desktop.deb
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.42304.0_amd64.deb
+        sha256: 74cd2ccc29d24165144e455cbc872c6cc2a24a263b83e73420e95f89166d4aa4
+        size: 183117920
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: debian-repo
+          package-name: claude-desktop
+          root: https://downloads.claude.ai/claude-desktop/apt/stable
+          dist: stable
+          component: main
+          is-main-source: true
+      - type: file
+        dest-filename: claude-icons.deb
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.42304.0_amd64.deb
+        sha256: 74cd2ccc29d24165144e455cbc872c6cc2a24a263b83e73420e95f89166d4aa4
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: debian-repo
+          package-name: claude-desktop
+          root: https://downloads.claude.ai/claude-desktop/apt/stable
+          dist: stable
+          component: main
+      - type: file
+        path: scripts/apply_extra.sh
+      - type: file
+        path: scripts/claude-desktop.sh
+      - type: file
+        path: scripts/host-run
+      - type: file
+        path: scripts/host-bridge
+      - type: file
+        path: io.github.musmandev092.ClaudeDesktop.desktop
+      - type: file
+        path: io.github.musmandev092.ClaudeDesktop.metainfo.xml
+
