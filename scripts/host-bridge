@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+import ctypes
+import fcntl
 import hashlib
 import os
 import re
@@ -28,6 +30,8 @@ LIST = ('{ echo "@@HOST_BRIDGE_SHELL=$(getent passwd "$(id -u)" | cut -d: -f7)";
 LOGIN = ('s=$(getent passwd "$(id -u)" | cut -d: -f7); '
          'exec "${s:-/bin/bash}" -l -c \'exec /bin/sh -c "$HOST_BRIDGE_LIST"\'')
 PLAIN = 'PATH="$HOME/.local/bin:$HOME/bin:$PATH"; exec /bin/sh -c "$HOST_BRIDGE_LIST"'
+STAT = 'IFS=:; for d in $HOST_BRIDGE_DIRS; do stat -Lc "%n %Y" -- "$d" 2>/dev/null || echo "$d -"; done'
+WATCH_EVERY = 5
 
 def on_host(script, timeout):
     try:
@@ -88,6 +92,12 @@ def in_sandbox(name):
     return any(os.path.exists(os.path.join(d, name)) for d in ("/usr/bin", "/bin"))
 
 def link():
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(os.path.join(CACHE_DIR, ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _link()
+
+def _link():
     if not scan() and not os.path.exists(COMMANDS):
         print("host-bridge: could not reach the host", file=sys.stderr)
         return False
@@ -126,8 +136,33 @@ def link():
                 shutil.rmtree(path, ignore_errors=True)
     return True
 
+def dirs_state():
+    try:
+        with open(PATH_FILE) as f:
+            dirs = f.read().strip()
+        return subprocess.run(
+            ["flatpak-spawn", "--host", "--watch-bus", "--env=HOST_BRIDGE_DIRS=" + dirs, "/bin/sh", "-c", STAT],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+def watch():
+    # Re-link when a host PATH directory changes, so commands installed while
+    # the app runs get a wrapper. Exits with the process that started it.
+    parent = os.getppid()
+    ctypes.CDLL(None).prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+    seen = dirs_state()
+    while os.getppid() == parent:
+        time.sleep(WATCH_EVERY)
+        now = dirs_state()
+        if now is not None and now != seen:
+            link()
+            seen = dirs_state()
+    return True
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "link"
-    ok = {"link": link, "scan": scan, "shell": shell}.get(action, lambda: False)()
+    ok = {"link": link, "scan": scan, "shell": shell, "watch": watch}.get(action, lambda: False)()
     sys.exit(0 if ok else 1)
 
