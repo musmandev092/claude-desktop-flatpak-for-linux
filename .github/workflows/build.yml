@@ -95,7 +95,10 @@ jobs:
 
       - name: Lint manifest and metainfo
         run: |
-          flatpak-builder-lint manifest "$MANIFEST" || true
+          # Deliberate design choices are listed, with reasons, in the exceptions file.
+          for m in "$MANIFEST" "$BRIDGE_MANIFEST"; do
+            flatpak-builder-lint --exceptions --user-exceptions flatpak-builder-lint-exceptions.json manifest "$m"
+          done
           appstreamcli validate --no-net "$APP_ID.metainfo.xml"
 
       - name: Lint scripts
