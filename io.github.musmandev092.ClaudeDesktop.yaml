@@ -1,17 +1,15 @@
 id: io.github.musmandev092.ClaudeDesktop
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 base: org.electronjs.Electron2.BaseApp
-base-version: '25.08'
+base-version: '26.08'
 command: claude-desktop
 separate-locales: false
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.golang
 cleanup-commands:
-  - rm -rf /app/bin/patch-electron-desktop-filename /app/share/locale /app/lib/python3.13
-    /app/lib/girepository-1.0 /app/lib/libunity /app/lib/libunity.so* /app/lib/libdee-1.0.so*
-    /app/lib/libgnome-keyring.so*
+  - rm -rf /app/share/locale /app/lib/girepository-1.0
 
 finish-args:
   - --socket=wayland
@@ -24,6 +22,7 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
   - --filesystem=home
+  - --filesystem=xdg-config/fontconfig:ro
   - --talk-name=org.freedesktop.Flatpak
 
 modules:

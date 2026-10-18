@@ -14,6 +14,8 @@ export HOST_BIN="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin"
 check "install: Claude binary present"          test -x $EXTRA/claude-desktop/claude-desktop
 check "install: Claude version recorded"        test -s $EXTRA/claude-version
 check "install: no local VM stack bundled"     test ! -e /app/bin/qemu-system-x86_64
+check "install: window app ID matches the desktop file" \
+    grep -aqF "\"desktopName\":\"$FLATPAK_ID.desktop\"" $EXTRA/claude-desktop/resources/app.asar
 
 if host-bridge link; then
     pass "bridge: $(ls "$HOST_BIN" | wc -l) host commands linked"
@@ -34,6 +36,13 @@ else
 fi
 startup 'echo "Welcome banner"' 'exit 1'
 check "bridge: startup files that exit early" scan ls
+fenv=(env HOME="$fake" XDG_CACHE_HOME="$fake/cache" HOST_BIN="$fake/hb")
+"${fenv[@]}" host-bridge link
+( "${fenv[@]}" host-bridge watch & sleep 30 ) & wpid=$!
+sleep 2; printf '#!/bin/sh\n' > "$fake/bin/late-tool" && chmod +x "$fake/bin/late-tool"
+until [ -e "$fake/hb/late-tool" ] || ! kill -0 $wpid 2>/dev/null; do sleep 0.5; done
+check "bridge: commands installed after start get a wrapper" test -e "$fake/hb/late-tool"
+kill $wpid 2>/dev/null; wait $wpid 2>/dev/null
 rm -rf "$fake"
 
 export PATH="/app/bin:$HOST_BIN:$PATH"
@@ -77,6 +86,13 @@ while True:
     out += chunk
 print(out.decode(errors="replace").strip()); p.wait()')
 is "bridge: socket stdio stays clean (no shell banners)" "$sock_out" "CLEAN-LINE"
+eof_out=$(/usr/bin/python3 -c '
+import socket, subprocess, tempfile
+a, b = socket.socketpair()
+with tempfile.TemporaryFile("w+") as f:
+    subprocess.run(["bash", "-c", "read x; echo rc=$?"], stdin=b.fileno(), stdout=f, timeout=20)
+    f.seek(0); print(f.read().strip())' 2>&1)
+is "bridge: unwritten socket stdin gets EOF (Bash tool heredocs)" "$eof_out" "rc=1"
 
 mcp_init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
 mcp() { { echo "$mcp_init"; sleep "$1"; } | timeout 180 "${@:2}" 2>/dev/null | head -c 400; }

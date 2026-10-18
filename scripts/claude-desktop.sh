@@ -15,6 +15,7 @@ export HOST_BIN="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin"
 if host-bridge link; then
     export PATH="/app/bin:$HOST_BIN:$PATH"
     s=$(host-bridge shell) && export SHELL="$s"
+    host-bridge watch </dev/null >/dev/null 2>&1 &
 fi
 
 env -0 > "$TMPDIR/sandbox.env"

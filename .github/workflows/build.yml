@@ -112,6 +112,7 @@ jobs:
           app="$(flatpak info --user --show-location "$APP_ID")/files"
           test ! -e "$app/bin/qemu-system-x86_64" && test ! -e "$app/share/OVMF"
           test ! -e "$extra/claude-desktop-orig" && test ! -e "$extra/cowork-status"
+          grep -aqF '"desktopName":"io.github.musmandev092.ClaudeDesktop.desktop"' "$extra/claude-desktop/resources/app.asar"
 
       - name: Keep the built repository for the publish job
         run: |

@@ -95,6 +95,9 @@ if [ -t 0 ] && [ -t 1 ]; then
     exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
 fi
 
+# A caller that captures output to a file over a socket stdin it never writes
+# (Claude Code's Bash tool) would leave prompts waiting forever: give EOF instead.
+[ -S /dev/stdin ] && [ -f /dev/stdout ] && exec </dev/null
 exec 5< <(envstream)
 trap - HUP INT TERM
 if [ "${CLAUDE_DESKTOP_RESOLVING_ENVIRONMENT:-}" = 1 ]; then
