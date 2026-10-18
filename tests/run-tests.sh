@@ -26,7 +26,7 @@ results=$(mktemp)
     else
         marker="cleanup-test-$$"
         flatpak run --command=bash "$APP_ID" -c "
-            export PATH=/app/bin:\$XDG_RUNTIME_DIR/app/\$FLATPAK_ID/host-bin:\$PATH
+            export PATH=/app/bridge/bin:/app/bin:\$XDG_RUNTIME_DIR/app/\$FLATPAK_ID/host-bin:\$PATH
             host-run python3 -c 'import time; time.sleep(600)  # $marker' </dev/null >/dev/null 2>&1 &
             sleep 60" &
         if waitfor 10 plugin_alive; then

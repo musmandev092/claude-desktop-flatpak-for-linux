@@ -16,8 +16,9 @@ CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(
 COMMANDS, PATH_FILE, SHELL_FILE = (os.path.join(CACHE_DIR, f) for f in ("host.commands", "host.path", "host.shell"))
 HOST_BIN = os.environ.get("HOST_BIN") or os.path.join(
     os.environ["XDG_RUNTIME_DIR"], "app", os.environ["FLATPAK_ID"], "host-bin")
-HOST_RUN = "/app/bin/host-run"
-RUNNER = ".host-run"
+BRIDGE = "/app/bridge/bin"
+HOST_RUN, HOST_PTY = BRIDGE + "/host-run", BRIDGE + "/host-pty"
+RUNNER, RELAY = ".host-run", ".host-pty"
 
 SKIP = {"sh", "dash", "env", "flatpak-spawn", "host-spawn", "host-run",
         "host-bridge", "xdg-open", "xdg-email"}
@@ -105,10 +106,13 @@ def _link():
         commands = f.read().split()
     wanted = sorted(n for n in commands
                     if n not in SKIP and not os.path.exists("/app/bin/" + n)
+                    and not os.path.exists(os.path.join(BRIDGE, n))
                     and (n in PREFER_HOST or not in_sandbox(n)))
     with open(HOST_RUN, "rb") as f:
         runner = f.read()
-    tag = hashlib.sha1("\n".join(wanted).encode() + b"\0" + runner).hexdigest()[:12]
+    with open(HOST_PTY, "rb") as f:
+        relay = f.read()
+    tag = hashlib.sha1("\n".join(wanted).encode() + b"\0" + runner + b"\0" + relay).hexdigest()[:12]
     target = f"{HOST_BIN}.{tag}"
 
     if os.path.islink(HOST_BIN) and os.readlink(HOST_BIN) == target and os.path.isdir(target):
@@ -120,6 +124,8 @@ def _link():
         with open(os.path.join(tmp, RUNNER), "wb") as f:
             f.write(runner)
         os.chmod(os.path.join(tmp, RUNNER), 0o755)
+        with open(os.path.join(tmp, RELAY), "wb") as f:
+            f.write(relay)
         for name in wanted:
             os.symlink(RUNNER, os.path.join(tmp, name))
         os.rename(tmp, target)

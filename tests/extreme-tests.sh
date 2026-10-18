@@ -32,7 +32,7 @@ flatpak run --command=bash "$APP_ID" "$HERE/extreme-in-sandbox.sh"
 
 echo "── Secrets never appear in the process list ──"
 inside 'head -c 12 /dev/urandom | od -An -tx1 | tr -d " \n" > $XDG_RUNTIME_DIR/app/$FLATPAK_ID/secret
-        MY_API_KEY=$(cat $XDG_RUNTIME_DIR/app/$FLATPAK_ID/secret) PATH=/app/bin:$PATH host-run sleep 6 </dev/null' &
+        MY_API_KEY=$(cat $XDG_RUNTIME_DIR/app/$FLATPAK_ID/secret) PATH=/app/bridge/bin:/app/bin:$PATH host-run sleep 6 </dev/null' &
 started() { [ -s "$RT/secret" ] && pgrep -f 'host-run sleep 6' >/dev/null; }
 waitfor 6 started; sleep 0.5
 secret=$(cat "$RT/secret" 2>/dev/null)
@@ -52,7 +52,7 @@ n=$(mains)
 [ "$rc" -eq 0 ] && [ "$n" -eq 1 ] \
     && pass "second launch: hands over to the running app" \
     || fail "second launch" "rc=$rc main-processes=$n"
-out=$(inside 'export PATH=/app/bin:$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin:$PATH; for i in $(seq 30); do node -e "" || echo MISSING; done' )
+out=$(inside 'export PATH=/app/bridge/bin:/app/bin:$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin:$PATH; for i in $(seq 30); do node -e "" || echo MISSING; done' )
 echo "$out" | grep -q MISSING && fail "relink while running: a command went missing" || pass "relink while running: commands never go missing"
 close
 

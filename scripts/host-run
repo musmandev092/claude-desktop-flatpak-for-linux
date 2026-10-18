@@ -92,7 +92,11 @@ LOAD_ENV='x=(); while IFS= read -r -d "" kv; do export "$kv" 2>/dev/null || x+=(
 [ ${#x[@]} -gt 0 ] && set -- env "${x[@]}" "$@"; exec "$@"'
 if [ -t 0 ] && [ -t 1 ]; then
     job=$(mktemp -p "$RUN_DIR" job.XXXXXXXX) && envstream > "$job" || exit 125
-    exec host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
+    # host-spawn's pty comes from the sandbox's devpts, which the host can't
+    # resolve (tty, ttyname, GPG_TTY fail): relay it to a host pty when python3 is there.
+    relay=${HOST_BIN:-$out/host-bin}/.host-pty
+    [ -f "$relay" ] && set -- /bin/sh -c 'command -v python3 >/dev/null && exec python3 "$0" "$@"; exec "$@"' "$relay" "$@"
+    exec /app/bridge/bin/host-spawn -pty -cwd "$dir" -env TERM,COLORTERM bash --norc --noprofile -c "$LOAD_ENV" "$job" "$@"
 fi
 
 # A caller that captures output to a file over a socket stdin it never writes

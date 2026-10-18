@@ -17,6 +17,7 @@ concurrency:
 env:
   APP_ID: io.github.musmandev092.ClaudeDesktop
   MANIFEST: io.github.musmandev092.ClaudeDesktop.yaml
+  BRIDGE_MANIFEST: io.github.musmandev092.ClaudeDesktop.Bridge.yaml
   PAGES_URL: https://musmandev092.github.io/claude-desktop-flatpak-for-linux
 
 jobs:
@@ -90,7 +91,7 @@ jobs:
           repo-dir: repo
           build-bundle: false
           upload-artifact: false
-          cache-key: flatpak-builder-${{ hashFiles(env.MANIFEST) }}
+          cache-key: flatpak-builder-${{ hashFiles(env.MANIFEST, env.BRIDGE_MANIFEST) }}
 
       - name: Lint manifest and metainfo
         run: |
@@ -113,6 +114,16 @@ jobs:
           test ! -e "$app/bin/qemu-system-x86_64" && test ! -e "$app/share/OVMF"
           test ! -e "$extra/claude-desktop-orig" && test ! -e "$extra/cowork-status"
           grep -aqF '"desktopName":"io.github.musmandev092.ClaudeDesktop.desktop"' "$extra/claude-desktop/resources/app.asar"
+          test -d "$app/bridge" && test ! -e "$app/bin/host-run" && test ! -e "$app/bin/host-spawn"
+
+      - name: Build the Bridge extension (scripts, host-spawn)
+        run: |
+          flatpak-builder --user --install-deps-from=flathub --repo=repo --force-clean \
+            --disable-rofiles-fuse --install build-bridge "$BRIDGE_MANIFEST"
+          bridge="$(flatpak info --user --show-location "$APP_ID.Bridge")/files"
+          for f in bridge-launch host-run host-bridge host-pty host-spawn; do test -x "$bridge/bin/$f"; done
+          flatpak run --user --command=sh "$APP_ID" -c \
+            'test -x /app/bridge/bin/bridge-launch && /app/bridge/bin/host-spawn --version'
 
       - name: Keep the built repository for the publish job
         run: |
@@ -159,7 +170,7 @@ jobs:
           args: -no-color
 
       - name: Shell scripts (shellcheck)
-        run: shellcheck -S warning scripts/host-run scripts/claude-desktop.sh scripts/apply_extra.sh tests/*.sh
+        run: shellcheck -S warning scripts/host-run scripts/claude-desktop.sh scripts/bridge-launch scripts/apply_extra.sh tests/*.sh
 
   publish:
     name: Sign and publish
@@ -212,31 +223,46 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:main
 
       - name: New app build, or keep the published one?
+        env:
+          NEW_VERSION: ${{ needs.check.outputs.changed }}
         run: |
+          # A new app commit makes every user download Claude's 180 MB .deb again, so the
+          # app ref only changes for a new Claude version (or a manual run). Script fixes
+          # live in the Bridge extension, which is always published from this build.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           old=$(python3 -c 'import json, sys, urllib.request
           b = json.load(urllib.request.urlopen(sys.argv[1] + "/BUILDINFO.json", timeout=30))
           print(b.get("app_source_commit") or b.get("source_commit") or "")' \
                 "$PAGES_URL" 2>/dev/null || true)
-          app_paths=("$MANIFEST" "$APP_ID.metainfo.xml" "$APP_ID.desktop" scripts)
+          app_paths=("$MANIFEST" "$APP_ID.metainfo.xml" "$APP_ID.desktop" scripts/apply_extra.sh scripts/claude-desktop.sh)
           keep=false
-          if [ -n "$old" ] && git cat-file -e "$old^{commit}" 2>/dev/null &&
-             git diff --quiet "$old" HEAD -- "${app_paths[@]}"; then
-            pub=$(mktemp)
-            gpg --dearmor < keys/flatpak-repo-public.asc > "$pub"
-            if ostree init --repo=repo --mode=archive-z2 &&
-               ostree --repo=repo remote add --gpg-import="$pub" live "$PAGES_URL/repo/" &&
-               ostree --repo=repo pull --mirror live &&
-               ostree --repo=repo remote delete live; then
+          if [ -n "$old" ] && git cat-file -e "$old^{commit}" 2>/dev/null; then
+            if git diff --quiet "$old" HEAD -- "${app_paths[@]}"; then
               keep=true
-            else
-              rm -rf repo
+            elif [ "$NEW_VERSION" != true ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+              echo "::notice::The app changed but Claude did not: the app update waits for the next Claude release (run the workflow by hand to publish it now)"
+              keep=true
             fi
           fi
           if [ "$keep" = true ]; then
-            echo "Nothing inside the app changed since $old: keeping the published build $(cat "repo/refs/heads/app/$APP_ID/x86_64/master")"
+            pub=$(mktemp)
+            gpg --dearmor < keys/flatpak-repo-public.asc > "$pub"
+            if ! { ostree init --repo=repo --mode=archive-z2 &&
+                   ostree --repo=repo remote add --gpg-import="$pub" live "$PAGES_URL/repo/" &&
+                   ostree --repo=repo pull --mirror live &&
+                   ostree --repo=repo remote delete live; }; then
+              rm -rf repo
+              keep=false
+            fi
+          fi
+          if [ "$keep" = true ]; then
+            mkdir new && tar -xf out/repo.tar -C new
+            ostree --repo=repo pull-local new/repo "runtime/$APP_ID.Bridge/x86_64/master"
+            rm -rf new
+            echo "Keeping the published app $(cat "repo/refs/heads/app/$APP_ID/x86_64/master") from $old; publishing the new Bridge"
           else
-            echo "The app changed (or there is no published build yet): publishing the new build"
+            echo "Publishing the new app and Bridge"
+            rm -rf repo
             tar -xf out/repo.tar
           fi
           echo "APP_KEPT=$keep" >> "$GITHUB_ENV"
@@ -307,6 +333,8 @@ jobs:
           deb = re.search(r"url: (https://downloads\.claude\.ai/\S+\.deb)\s+sha256: (\w+)\s+size: (\d+)", m)
           ostree = open(f"repo/refs/heads/app/{os.environ['APP_ID']}/x86_64/master").read().strip()
           assert re.fullmatch(r"[0-9a-f]{64}", ostree), ostree
+          bridge = open(f"repo/refs/heads/runtime/{os.environ['APP_ID']}.Bridge/x86_64/master").read().strip()
+          assert re.fullmatch(r"[0-9a-f]{64}", bridge), bridge
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
           kept = os.environ.get("APP_KEPT") == "true"
@@ -321,6 +349,8 @@ jobs:
               "app_source_commit": (old.get("app_source_commit") or old.get("source_commit")) if kept else head,
               "built_by": old.get("built_by") if kept else run,
               "app_kept_from_previous_release": kept,
+              "bridge_commit": bridge,
+              "bridge_source_commit": head,
               "source_commit": head,
               "published_by": run,
               "trigger": os.environ["GITHUB_EVENT_NAME"],
