@@ -19,14 +19,14 @@ jobs:
       contents: write          # merge into main
       pull-requests: write     # merge the PR
       checks: read             # read check results
+      actions: write           # start Build after a merge (merges with this token fire no push)
     steps:
       - name: Merge the ones whose checks all passed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          gh api "repos/$REPO/pulls?state=open&per_page=100" \
-            --jq '.[] | select(.user.login == "dependabot[bot]") | "\(.number) \(.head.sha) \(.base.ref)"' |
+          merged=
           while read -r pr sha base; do
             stale=$(gh api "repos/$REPO/compare/$sha...$base" \
                     --jq '[.files[]? | select(.filename | startswith(".github/workflows/"))] | length')
@@ -40,10 +40,17 @@ jobs:
             not_done=$(jq -r '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length' <<<"$checks")
             if [ "$build_ok" -ge 1 ] && [ "$not_done" -eq 0 ]; then
               echo "PR #$pr: all checks passed on $sha – merging"
-              gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$sha" ||
+              if gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$sha"; then
+                merged=1
+              else
                 echo "::warning::PR #$pr could not be merged; it is retried next hour"
+              fi
             else
               echo "PR #$pr: not ready (build passed: $build_ok, pending/failed checks: $not_done)"
             fi
-          done
+          done < <(gh api "repos/$REPO/pulls?state=open&per_page=100" \
+                     --jq '.[] | select(.user.login == "dependabot[bot]") | "\(.number) \(.head.sha) \(.base.ref)"')
+          if [ -n "$merged" ]; then
+            gh workflow run build.yml -R "$REPO" --ref main
+          fi
 

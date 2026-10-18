@@ -38,7 +38,10 @@ usual (e.g. `rpm-ostree install nodejs uv`), exactly like the native app.
   its SHA-256. Nothing from Anthropic is redistributed and Claude runs unmodified.
 - A small bridge links every host command into the sandbox, so Claude Code and plugins use
   your tools. Plugins stop when Claude quits.
-- **No human in the loop:** GitHub Actions checks Anthropic's repository every few hours,
+- The bridge ships as a separate small extension (`io.github.musmandev092.ClaudeDesktop.Bridge`),
+  installed and updated together with the app. Fixes to it are tiny updates; you only download
+  Claude again when Anthropic releases a new version.
+- **No human in the loop:** GitHub Actions checks Anthropic's repository every hour,
   builds, install-tests, scans, signs and publishes each new version. If anything fails,
   nothing is published.
 

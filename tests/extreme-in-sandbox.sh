@@ -7,8 +7,8 @@ skip() { echo "SKIP  $1${2:+  — $2}"; }
 is() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "expected [$3] got [$2]"; fi; }
 
 export HOST_BIN="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin"
-host-bridge link >/dev/null 2>&1
-export PATH="/app/bin:$HOST_BIN:$PATH"
+/app/bridge/bin/host-bridge link >/dev/null 2>&1
+export PATH="/app/bridge/bin:/app/bin:$HOST_BIN:$PATH"
 T=$(mktemp -d -p "$HOME/.var/app/$FLATPAK_ID/cache")
 trap 'rm -rf "$T"' EXIT
 

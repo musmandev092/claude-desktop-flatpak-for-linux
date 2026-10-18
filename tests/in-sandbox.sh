@@ -10,6 +10,7 @@ check() { local name=$1; shift; if "$@" >/dev/null 2>&1; then pass "$name"; else
 
 EXTRA=/app/extra
 export HOST_BIN="$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-bin"
+export PATH="/app/bridge/bin:$PATH"
 
 check "install: Claude binary present"          test -x $EXTRA/claude-desktop/claude-desktop
 check "install: Claude version recorded"        test -s $EXTRA/claude-version
@@ -45,7 +46,7 @@ check "bridge: commands installed after start get a wrapper" test -e "$fake/hb/l
 kill $wpid 2>/dev/null; wait $wpid 2>/dev/null
 rm -rf "$fake"
 
-export PATH="/app/bin:$HOST_BIN:$PATH"
+export PATH="/app/bridge/bin:/app/bin:$HOST_BIN:$PATH"
 has() { [ -e "$HOST_BIN/$1" ]; }
 for c in bash git python3 node npx uvx toolbox podman flatpak rpm-ostree; do
     if has "$c"; then pass "bridge: '$c' comes from the host"; else skip "bridge: '$c'" "not installed on the host"; fi
@@ -72,6 +73,13 @@ s=$(date +%s%N); out=$(host-run echo ok </dev/null 2>&1); ms=$(( ($(date +%s%N) 
 [ "$out" = ok ] && pass "speed: a host command takes ${ms} ms" || fail "speed: host command" "$out"
 out=$(script -qec 'bash -c "test -t 0 && readlink /proc/self/fd/0"' /dev/null 2>/dev/null | tr -d '\r\0')
 case "$out" in *"/dev/pts/"*) pass "bridge: terminal gets a real pty";; *) fail "bridge: terminal gets a real pty" "$out";; esac
+# The pty must be one the host can resolve (#10): tty, ttyname and GPG_TTY work.
+out=$(script -qec 'bash -c "host-run sh -c '"'"'t=\$(tty) && test -e \"\$t\" && python3 -c \"import os; os.ttyname(0)\" && echo HOSTTTY'"'"'"' /dev/null 2>&1 | tr -d '\r\0')
+case "$out" in *HOSTTTY*) pass "bridge: terminal pty resolves on the host";; *) fail "bridge: terminal pty resolves on the host" "$out";; esac
+out=$(script -qec 'bash -c "stty cols 101 rows 33; host-run stty size"' /dev/null 2>&1 | tr -d '\r\0')
+case "$out" in *"33 101"*) pass "bridge: terminal size reaches the host";; *) fail "bridge: terminal size reaches the host" "$out";; esac
+out=$(script -qec 'bash -c "host-run sh -c '"'"'exit 7'"'"'; echo rc=\$?"' /dev/null 2>&1 | tr -d '\r\0')
+case "$out" in *rc=7*) pass "bridge: terminal exit status comes back";; *) fail "bridge: terminal exit status comes back" "$out";; esac
 
 sock_out=$(/usr/bin/python3 -c '
 import socket, subprocess

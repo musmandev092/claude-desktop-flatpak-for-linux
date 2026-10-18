@@ -1,5 +1,5 @@
 #!/bin/bash
-HR=/app/bin/host-run; [ -n "${PROJECT:-}" ] && HR="/bin/bash $(cd "$(dirname "$0")/.." && pwd)/scripts/host-run"
+HR=/app/bridge/bin/host-run; [ -n "${PROJECT:-}" ] && HR="/bin/bash $(cd "$(dirname "$0")/.." && pwd)/scripts/host-run"
 R=$XDG_RUNTIME_DIR/app/$FLATPAK_ID/host-run
 pass(){ echo "PASS  $1"; }; fail(){ echo "FAIL  $1 ${2:-}"; }
 jobs_now() { find "$R" -maxdepth 1 -name 'job.*' -printf '%f\n' 2>/dev/null | sort; }

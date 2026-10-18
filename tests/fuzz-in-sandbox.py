@@ -486,7 +486,7 @@ def main():
     ctx = Ctx()
     ctx.seed = a.seed
     ctx.base_env = {k: v for k, v in os.environ.items()}
-    src = f"{PROJECT}/scripts" if a.project else "/app/bin"
+    src = f"{PROJECT}/scripts" if a.project else "/app/bridge/bin"
     ctx.hr = ["/bin/bash", f"{src}/host-run"]
     cache_root = f"{HOME}/.var/app/{APP}/cache"
     for old in os.listdir(cache_root):

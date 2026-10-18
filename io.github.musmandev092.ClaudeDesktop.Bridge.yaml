@@ -1,0 +1,48 @@
+id: io.github.musmandev092.ClaudeDesktop.Bridge
+runtime: io.github.musmandev092.ClaudeDesktop
+runtime-version: master
+sdk: org.freedesktop.Sdk//26.08
+build-extension: true
+separate-locales: false
+appstream-compose: false
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+
+# Installed at /app/bridge (the app's extension point). Ships separately from the
+# app so that a script fix is a small update, not a new 180 MB Claude download.
+modules:
+  - name: host-spawn
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        CGO_ENABLED: '0'
+        GOFLAGS: -mod=vendor
+    build-commands:
+      - GOCACHE="$PWD/.gocache" go build -trimpath -ldflags "-s -w -X main.Version=1.6.2"
+        -o ${FLATPAK_DEST}/bin/host-spawn .
+    sources:
+      - type: git
+        url: https://github.com/1player/host-spawn.git
+        tag: v1.6.2
+        commit: d76c3a5196a8e0943f6a1c7c9f1acde4bd83c40c
+      - type: archive
+        url: https://github.com/1player/host-spawn/releases/download/v1.6.2/host-spawn-vendor.tar.zst
+        sha256: 9abfddf5c1eba0704d643de06988ff3b8cdd2f594bfb4d1c0027315552dad5cc
+
+  - name: bridge
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 bridge-launch ${FLATPAK_DEST}/bin/bridge-launch
+      - install -Dm755 host-run ${FLATPAK_DEST}/bin/host-run
+      - install -Dm755 host-bridge ${FLATPAK_DEST}/bin/host-bridge
+      - install -Dm755 host-pty ${FLATPAK_DEST}/bin/host-pty
+    sources:
+      - type: file
+        path: scripts/bridge-launch
+      - type: file
+        path: scripts/host-run
+      - type: file
+        path: scripts/host-bridge
+      - type: file
+        path: scripts/host-pty

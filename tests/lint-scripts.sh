@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eu
 cd "$(dirname "$0")/.."
-for f in scripts/host-run scripts/claude-desktop.sh scripts/apply_extra.sh tests/*.sh; do
+for f in scripts/host-run scripts/claude-desktop.sh scripts/bridge-launch scripts/apply_extra.sh tests/*.sh; do
     bash -n "$f"
 done
 # shellcheck disable=SC2016
@@ -11,7 +11,7 @@ if [ -z "$body" ] || ! printf '%s\n' "$body" | bash -n; then
     echo "LOAD_ENV in host-run is missing or does not parse" >&2
     exit 1
 fi
-python3 -m py_compile scripts/host-bridge tests/fuzz-in-sandbox.py
+python3 -m py_compile scripts/host-bridge scripts/host-pty tests/fuzz-in-sandbox.py
 find . -name __pycache__ -type d -prune -exec rm -rf {} +
 echo "lint: all scripts parse"
 
