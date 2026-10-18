@@ -74,11 +74,12 @@ s=$(date +%s%N); out=$(host-run echo ok </dev/null 2>&1); ms=$(( ($(date +%s%N) 
 out=$(script -qec 'bash -c "test -t 0 && readlink /proc/self/fd/0"' /dev/null 2>/dev/null | tr -d '\r\0')
 case "$out" in *"/dev/pts/"*) pass "bridge: terminal gets a real pty";; *) fail "bridge: terminal gets a real pty" "$out";; esac
 # The pty must be one the host can resolve (#10): tty, ttyname and GPG_TTY work.
-out=$(script -qec 'bash -c "host-run sh -c '"'"'t=\$(tty) && test -e \"\$t\" && python3 -c \"import os; os.ttyname(0)\" && echo HOSTTTY'"'"'"' /dev/null 2>&1 | tr -d '\r\0')
+# /bin/bash: plain "bash" is the host-bin wrapper, which runs on the host.
+out=$(script -qec '/bin/bash -c "host-run sh -c '"'"'t=\$(tty) && test -e \"\$t\" && python3 -c \"import os; os.ttyname(0)\" && echo HOSTTTY'"'"'"' /dev/null 2>&1 | tr -d '\r\0')
 case "$out" in *HOSTTTY*) pass "bridge: terminal pty resolves on the host";; *) fail "bridge: terminal pty resolves on the host" "$out";; esac
-out=$(script -qec 'bash -c "stty cols 101 rows 33; host-run stty size"' /dev/null 2>&1 | tr -d '\r\0')
+out=$(script -qec '/bin/bash -c "stty cols 101 rows 33; host-run stty size"' /dev/null 2>&1 | tr -d '\r\0')
 case "$out" in *"33 101"*) pass "bridge: terminal size reaches the host";; *) fail "bridge: terminal size reaches the host" "$out";; esac
-out=$(script -qec 'bash -c "host-run sh -c '"'"'exit 7'"'"'; echo rc=\$?"' /dev/null 2>&1 | tr -d '\r\0')
+out=$(script -qec '/bin/bash -c "host-run sh -c '"'"'exit 7'"'"'; echo rc=\$?"' /dev/null 2>&1 | tr -d '\r\0')
 case "$out" in *rc=7*) pass "bridge: terminal exit status comes back";; *) fail "bridge: terminal exit status comes back" "$out";; esac
 
 sock_out=$(/usr/bin/python3 -c '
