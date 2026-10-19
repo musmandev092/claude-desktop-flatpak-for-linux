@@ -36,8 +36,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="2.42304.0" date="2026-10-15">
+    <release version="2.42304.2" date="2026-10-19">
       <description></description>
+    </release>
+    <release version="2.42304.0" date="2026-10-15">
+      <description/>
     </release>
   </releases>
 </component>
