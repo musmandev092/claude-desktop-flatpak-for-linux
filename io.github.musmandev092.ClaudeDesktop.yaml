@@ -47,9 +47,9 @@ modules:
     sources:
       - type: extra-data
         filename: claude-desktop.deb
-        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.42304.2_amd64.deb
-        sha256: 38a7d58b58a976c88ca652eaa2f7ac02c87c4a388ae30f468d72b790e6b57f90
-        size: 183213384
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_3.1623.0_amd64.deb
+        sha256: d39e1d9a570f1e517f158479f5a1d903b9a74d1ef3f279362002dcad375e33cf
+        size: 187223160
         only-arches:
           - x86_64
         x-checker-data:
@@ -61,8 +61,8 @@ modules:
           is-main-source: true
       - type: file
         dest-filename: claude-icons.deb
-        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.42304.2_amd64.deb
-        sha256: 38a7d58b58a976c88ca652eaa2f7ac02c87c4a388ae30f468d72b790e6b57f90
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_3.1623.0_amd64.deb
+        sha256: d39e1d9a570f1e517f158479f5a1d903b9a74d1ef3f279362002dcad375e33cf
         only-arches:
           - x86_64
         x-checker-data:
