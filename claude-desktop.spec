@@ -88,6 +88,7 @@ ships it. Check the installed files any time with claude-desktop-verify.
 
 %prep
 %setup -q -c -T
+cp -p %{SOURCE7} LICENSE
 
 %build
 # Nothing to build.
@@ -98,7 +99,6 @@ install -D -m 0755 %{SOURCE1} %{buildroot}%{_bindir}/claude-desktop-verify
 install -D -m 0644 %{SOURCE2} %{buildroot}%{_unitdir}/claude-desktop-fetch.service
 install -D -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/claude-desktop-rpm/source.conf
 install -D -m 0644 %{SOURCE4} %{buildroot}%{_datadir}/claude-desktop-rpm/manifest
-install -D -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE
 # Launcher links, the same targets as in the .deb (our links, not Anthropic files)
 ln -s ../lib/claude-desktop/claude-desktop %{buildroot}%{_bindir}/claude-desktop
 %if 0%{?with_ccd}
@@ -130,7 +130,7 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %files -f %{SOURCE5}
-%license %{_datadir}/licenses/%{name}/LICENSE
+%license LICENSE
 %{_bindir}/claude-desktop-fetch
 %{_bindir}/claude-desktop-verify
 %{_bindir}/claude-desktop
