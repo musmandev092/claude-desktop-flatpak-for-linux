@@ -1,0 +1,9 @@
+[claude-desktop]
+name=Claude Desktop for Fedora (unofficial)
+baseurl=@URL@/repo
+enabled=1
+type=rpm
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=@URL@/RPM-GPG-KEY-claude-desktop-rpm.asc
+metadata_expire=6h

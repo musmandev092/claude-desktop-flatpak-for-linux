@@ -1,0 +1,137 @@
+#!/bin/bash
+#
+# claude-desktop-fetch - install Anthropic's official Claude Desktop build.
+#
+# The claude-desktop RPM ships no Anthropic files. It pins one exact .deb
+# (URL, size, SHA256 in source.conf) and lists every file in it (manifest).
+# This script, run as root from the RPM's %post (or by hand), downloads that
+# .deb from downloads.claude.ai, checks it, unpacks it into a staging
+# directory, verifies every file against the manifest, and only then swaps
+# it into place. If anything fails, the installed copy is left as it was and
+# claude-desktop-fetch.service retries at the next boot.
+#
+# Usage: claude-desktop-fetch [--if-pending] [--from-rpm]
+set -euo pipefail
+
+DATA=/usr/share/claude-desktop-rpm
+STATE=/var/lib/claude-desktop-rpm
+CACHE=/var/cache/claude-desktop-rpm
+APP=/usr/lib/claude-desktop
+UNIT=claude-desktop-fetch.service
+
+IF_PENDING=0
+for a in "$@"; do
+    case "$a" in
+        --if-pending) IF_PENDING=1 ;;
+        --from-rpm)   ;;  # called from the RPM %post (same behaviour)
+        -h|--help)    sed -n '3,13p' "$0"; exit 0 ;;
+        *)            echo "claude-desktop-fetch: unknown option $a" >&2; exit 2 ;;
+    esac
+done
+
+say() { printf 'claude-desktop: %s\n' "$*"; }
+die() { printf 'claude-desktop: error: %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "run as root: sudo claude-desktop-fetch"
+if [ "$IF_PENDING" -eq 1 ] && [ ! -e "$STATE/pending" ]; then
+    exit 0
+fi
+
+# source.conf is ours (shipped in the signed RPM); read only the four keys.
+conf() { sed -n "s/^$1=//p" "$DATA/source.conf" | head -n1; }
+VERSION=$(conf VERSION)
+DEB_URL=$(conf DEB_URL)
+DEB_SHA256=$(conf DEB_SHA256)
+DEB_SIZE=$(conf DEB_SIZE)
+[[ "$VERSION" =~ ^[0-9][0-9A-Za-z.+~]*$ ]] || die "bad VERSION in source.conf"
+[[ "$DEB_URL" =~ ^https://downloads\.claude\.ai/[A-Za-z0-9._+~/-]+\.deb$ ]] || die "bad DEB_URL in source.conf"
+[[ "$DEB_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "bad DEB_SHA256 in source.conf"
+[[ "$DEB_SIZE" =~ ^[0-9]{1,12}$ ]] || die "bad DEB_SIZE in source.conf"
+
+install -d -m 0755 "$STATE" "$CACHE"
+touch "$STATE/pending"
+
+retry_later() {
+    say "$1"
+    # `systemctl enable` only writes symlinks, so it works in a chroot or
+    # container too (no running systemd needed).
+    if systemctl enable "$UNIT" >/dev/null 2>&1; then
+        say "will retry at next boot, or run now: sudo claude-desktop-fetch"
+    else
+        say "run again when online: sudo claude-desktop-fetch"
+    fi
+    exit 1
+}
+
+WORK=$(mktemp -d "$CACHE/stage.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+DEB="$WORK/claude.deb"
+
+say "downloading Claude Desktop $VERSION from downloads.claude.ai ($(( DEB_SIZE / 1048576 )) MB)..."
+curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 5 --connect-timeout 30 \
+     --max-time 1800 --max-filesize "$DEB_SIZE" -o "$DEB" "$DEB_URL" \
+    || retry_later "download failed (offline?)"
+[ "$(stat -c %s "$DEB")" = "$DEB_SIZE" ] || retry_later "download is not the expected size"
+[ "$(sha256sum "$DEB" | cut -d' ' -f1)" = "$DEB_SHA256" ] \
+    || die "download does not match the pinned SHA256; refusing it"
+say "download verified (SHA256)"
+
+# Unpack: the .deb is an ar archive; bsdtar reads it without binutils.
+mkdir "$WORK/deb" "$WORK/root"
+bsdtar -xf "$DEB" -C "$WORK/deb" 'data.tar.*' || die "cannot read the .deb"
+rm -f "$DEB"
+data=$(find "$WORK/deb" -maxdepth 1 -name 'data.tar.*' -print -quit)
+[ -n "$data" ] || die "no data.tar.* in the .deb"
+bsdtar -xpf "$data" -C "$WORK/root" --no-same-owner || die "cannot unpack data.tar"
+rm -rf "$WORK/deb"
+R="$WORK/root"
+[ -d "$R$APP" ] || die "unexpected payload layout"
+
+# What the .deb's postinst does on Ubuntu, minus AppArmor and the apt repo:
+# copy the MIME types and GNOME search provider out of resources/.
+res="$R$APP/resources"
+cp_into() { [ -f "$1" ] && install -D -m 0644 "$1" "$R$2"; }
+cp_into "$res/linux-mime/com.anthropic.Claude.xml" /usr/share/mime/packages/com.anthropic.Claude.xml || true
+cp_into "$res/gnome-search-provider/com.anthropic.Claude.search-provider.ini" \
+        /usr/share/gnome-shell/search-providers/com.anthropic.Claude.search-provider.ini || true
+cp_into "$res/gnome-search-provider/com.anthropic.Claude.SearchProvider.service" \
+        /usr/share/dbus-1/services/com.anthropic.Claude.SearchProvider.service || true
+# Debian metadata and the launcher symlinks (the RPM ships its own links).
+rm -rf "${R:?}/usr/share/lintian" "${R:?}/usr/bin"
+
+chown -R root:root "$R"
+[ -f "$R$APP/chrome-sandbox" ] && chmod 4755 "$R$APP/chrome-sandbox"
+
+claude-desktop-verify --root "$R" || die "unpacked files do not match the manifest; nothing installed"
+
+# Swap the app directory in with renames, so a running Claude keeps its open
+# files and there is never a half-written tree at $APP.
+rm -rf "$APP.rpmnew" "$APP.rpmold"
+mv "$R$APP" "$APP.rpmnew"
+[ -d "$APP" ] && mv "$APP" "$APP.rpmold"
+mv "$APP.rpmnew" "$APP"
+rm -rf "$APP.rpmold"
+
+# Remaining files (desktop entry, icons, MIME, search provider, docs).
+( cd "$R" && find usr \( -type f -o -type l \) -print0 ) |
+while IFS= read -r -d '' f; do
+    install -d -m 0755 "/$(dirname "$f")"
+    rm -f "/$f"
+    cp -a "$R/$f" "/$f"
+done
+
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    restorecon -RF "$APP" /usr/share/applications /usr/share/icons/hicolor \
+        /usr/share/mime/packages /usr/share/dbus-1/services /usr/share/doc/claude-desktop \
+        /usr/share/gnome-shell 2>/dev/null || true
+fi
+
+# Files created by a script do not fire rpm's file triggers: refresh caches here.
+command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
+command -v update-mime-database   >/dev/null && update-mime-database /usr/share/mime || true
+command -v gtk-update-icon-cache  >/dev/null && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+
+printf '%s\n' "$VERSION" > "$STATE/installed-version"
+rm -f "$STATE/pending"
+systemctl disable "$UNIT" >/dev/null 2>&1 || true
+say "Claude Desktop $VERSION installed"

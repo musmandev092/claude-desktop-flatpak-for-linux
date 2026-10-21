@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# claude-desktop-verify - check the installed Claude Desktop files against the
+# manifest shipped in the claude-desktop RPM (SHA256 + mode of every file,
+# target of every symlink, presence of every directory). Does what `rpm -V`
+# would do for files rpm itself did not write.
+#
+# Usage: claude-desktop-verify [--root DIR] [--manifest FILE]
+#   --root DIR       check a staged tree under DIR instead of /
+#   --manifest FILE  use FILE instead of the installed manifest (build checks)
+# Exit status: 0 = everything matches, 1 = something differs or is missing.
+set -euo pipefail
+
+MANIFEST=/usr/share/claude-desktop-rpm/manifest
+ROOT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --root) ROOT="${2:?--root needs a directory}"; ROOT="${ROOT%/}"; shift 2 ;;
+        --manifest) MANIFEST="${2:?--manifest needs a file}"; shift 2 ;;
+        -h|--help) sed -n '3,11p' "$0"; exit 0 ;;
+        *) echo "claude-desktop-verify: unknown option $1" >&2; exit 2 ;;
+    esac
+done
+[ -r "$MANIFEST" ] || { echo "claude-desktop-verify: no manifest at $MANIFEST" >&2; exit 2; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+fail=0
+
+# Manifest lines (paths never contain whitespace; the generator enforces it):
+#   F <mode> <sha256> <path>
+#   L <target> <path>
+#   D <mode> <path>
+while read -r t a b c; do
+    case "$t" in
+        F) printf '%s  %s\n' "$b" "$ROOT$c" >> "$tmp/sums"
+           printf '%s\t%s\n' "$a" "$ROOT$c" >> "$tmp/modes" ;;
+        L) if [ "$(readlink "$ROOT$b" 2>/dev/null)" != "$a" ]; then
+               echo "  link wrong or missing: $b"; fail=1
+           fi ;;
+        D) [ -d "$ROOT$b" ] || { echo "  directory missing: $b"; fail=1; } ;;
+        '') ;;
+        *) echo "claude-desktop-verify: bad manifest line: $t" >&2; exit 2 ;;
+    esac
+done < "$MANIFEST"
+
+# Checksums: one sha256sum run for all files (reports FAILED / missing files).
+if ! sha256sum --quiet -c "$tmp/sums" > "$tmp/sum-out" 2>&1; then
+    sed 's/^/  /' "$tmp/sum-out"
+    fail=1
+fi
+
+# Modes (setuid chrome-sandbox included): compare what is on disk.
+cut -f2 "$tmp/modes" | tr '\n' '\0' | xargs -0 stat -c '%a\t%n' 2>/dev/null > "$tmp/actual" || true
+if ! awk -F'\t' 'NR == FNR { want[$2] = $1; next }
+                 ($2 in want) && want[$2] != $1 { printf "  mode %s, expected %s: %s\n", $1, want[$2], $2; bad = 1 }
+                 END { exit bad }' "$tmp/modes" "$tmp/actual"; then
+    fail=1
+fi
+
+total=$(wc -l < "$MANIFEST")
+if [ "$fail" -eq 0 ]; then
+    echo "claude-desktop-verify: all $total entries match"
+else
+    echo "claude-desktop-verify: MISMATCH (see above); fix with: sudo claude-desktop-fetch" >&2
+fi
+exit "$fail"

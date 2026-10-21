@@ -1,0 +1,15 @@
+[Unit]
+Description=Finish installing Claude Desktop (download Anthropic's official build)
+Documentation=https://github.com/musmandev092/claude-desktop-rpm
+# Only enabled by the RPM when the download during install failed (offline).
+ConditionPathExists=/var/lib/claude-desktop-rpm/pending
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/claude-desktop-fetch --if-pending
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

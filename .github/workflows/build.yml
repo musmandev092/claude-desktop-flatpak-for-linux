@@ -15,137 +15,117 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  APP_ID: io.github.musmandev092.ClaudeDesktop
-  MANIFEST: io.github.musmandev092.ClaudeDesktop.yaml
-  BRIDGE_MANIFEST: io.github.musmandev092.ClaudeDesktop.Bridge.yaml
-  PAGES_URL: https://musmandev092.github.io/claude-desktop-flatpak-for-linux
+  RPM_KEY_FPR: "9A67611264AD59383EFA3AA1E0B0E56DCFAE37BB"  # public key fingerprint, gitleaks:allow
 
 jobs:
   check:
-    name: Check for a new Claude version
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: What to build
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      changed: ${{ steps.diff.outputs.changed }}
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
-      - name: Check Anthropic's repository
-        uses: docker://ghcr.io/flathub/flatpak-external-data-checker@sha256:58cbad601261c2ebaae2e18b6f639c09aa5809ef941dcff7284f68928ebb790d
-        with:
-          args: --edit-only --require-important-update io.github.musmandev092.ClaudeDesktop.yaml
-
-      - name: Anything new?
-        id: diff
+      - name: Compare Anthropic's newest build with what is published
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: |
-          if git diff --quiet; then
-            echo "No new version."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            git diff --stat
-            git diff
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          # Newest official build, from Anthropic's signed apt index (verified by the script).
+          read -r version sha _ < <(tools/build-rpm.sh --print-latest)
+          echo "Anthropic's newest build: $version ($sha)"
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          pub=$(curl -fsS --max-time 30 "$pages/BUILDINFO.json" 2>/dev/null || echo '{}')
+          pub_version=$(jq -r '.claude_version // ""' <<<"$pub")
+          pub_release=$(jq -r '.rpm_release // 0' <<<"$pub")
+          pub_commit=$(jq -r '.source_commit // ""' <<<"$pub")
+          echo "Published: ${pub_version:-nothing} release $pub_release from ${pub_commit:-?}"
+
+          packaging_changed=true
+          if [ -n "$pub_commit" ] && git cat-file -e "$pub_commit^{commit}" 2>/dev/null &&
+             git diff --quiet "$pub_commit" HEAD -- claude-desktop.spec scripts tools keys LICENSE; then
+            packaging_changed=false
           fi
 
-      - name: Keep the updated files for the next jobs
-        if: steps.diff.outputs.changed == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: update
-          path: |
-            io.github.musmandev092.ClaudeDesktop.yaml
-            io.github.musmandev092.ClaudeDesktop.metainfo.xml
-          retention-days: 7
+          build=true; publish=false; release=1
+          if [ "$version" != "$pub_version" ]; then
+            release=1                                  # new Claude version
+          elif [ "$packaging_changed" = true ] || [ "$EVENT" = workflow_dispatch ]; then
+            release=$((pub_release + 1))               # same Claude, new packaging
+          elif [ "$EVENT" = schedule ] || [ "$EVENT" = push ]; then
+            build=false                                # nothing new
+          fi
+          if [ "$build" = true ] && [ "$EVENT" != pull_request ] && [ "$REF" = refs/heads/main ]; then
+            publish=true
+          fi
+          { echo "build=$build"; echo "publish=$publish"; echo "release=$release"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+          echo "build=$build publish=$publish release=$release"
 
   build:
-    name: Build and test
+    name: Build the RPM (no Anthropic files inside)
     needs: check
-    if: >-
-      !cancelled() && needs.check.result != 'failure' &&
-      (github.event_name != 'schedule' || needs.check.outputs.changed == 'true')
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae
-      options: --privileged
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
+    steps:
+      - name: Build tools
+        run: dnf -y -q install bsdtar rpm-build gnupg2 curl systemd-rpm-macros findutils git-core
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        env:
+          RELEASE: ${{ needs.check.outputs.release }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          tools/build-rpm.sh --outdir out --release "$RELEASE"
+          grep -qx "VERSION=$VERSION" out/source.conf || { echo "::error::built a different version than planned"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rpm
+          path: out/
+          retention-days: 7
+
+  test:
+    name: Install test (real download from Anthropic)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-      - name: Use the updated manifest
-        if: needs.check.outputs.changed == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: update
+          name: rpm
+          path: out
 
-      - name: Build
-        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3
-        with:
-          manifest-path: ${{ env.MANIFEST }}
-          repo-dir: repo
-          build-bundle: false
-          upload-artifact: false
-          cache-key: flatpak-builder-${{ hashFiles(env.MANIFEST, env.BRIDGE_MANIFEST) }}
-
-      - name: Lint manifest and metainfo
-        run: |
-          # Deliberate design choices are listed, with reasons, in the exceptions file.
-          for m in "$MANIFEST" "$BRIDGE_MANIFEST"; do
-            flatpak-builder-lint --exceptions --user-exceptions flatpak-builder-lint-exceptions.json manifest "$m"
-          done
-          appstreamcli validate --no-net "$APP_ID.metainfo.xml"
-
-      - name: Lint scripts
-        run: tests/lint-scripts.sh
-
-      - name: Smoke test install
-        run: |
-          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak --user remote-add --no-gpg-verify ci-local repo
-          flatpak --user install -y --noninteractive ci-local "$APP_ID"
-          extra="$(flatpak info --user --show-location "$APP_ID")/files/extra"
-          test -x "$extra/claude-desktop/claude-desktop"
-          echo "Claude version: $(cat "$extra/claude-version")"
-          flatpak info --user --show-permissions "$APP_ID" | grep -qx 'devices=dri;'
-          app="$(flatpak info --user --show-location "$APP_ID")/files"
-          test ! -e "$app/bin/qemu-system-x86_64" && test ! -e "$app/share/OVMF"
-          test ! -e "$extra/claude-desktop-orig" && test ! -e "$extra/cowork-status"
-          grep -aqF '"desktopName":"io.github.musmandev092.ClaudeDesktop.desktop"' "$extra/claude-desktop/resources/app.asar"
-          test -d "$app/bridge" && test ! -e "$app/bin/host-run" && test ! -e "$app/bin/host-spawn"
-
-      - name: Build the Bridge extension (scripts, host-spawn)
-        run: |
-          flatpak-builder --user --install-deps-from=flathub --repo=repo --force-clean \
-            --disable-rofiles-fuse --install build-bridge "$BRIDGE_MANIFEST"
-          bridge="$(flatpak info --user --show-location "$APP_ID.Bridge")/files"
-          for f in bridge-launch host-run host-bridge host-pty host-spawn; do test -x "$bridge/bin/$f"; done
-          flatpak run --user --command=sh "$APP_ID" -c \
-            'test -x /app/bridge/bin/bridge-launch && /app/bridge/bin/host-spawn --version'
-
-      - name: Keep the built repository for the publish job
-        run: |
-          mkdir -p out
-          cp "$(flatpak info --user --show-location "$APP_ID")/files/share/icons/hicolor/256x256/apps/$APP_ID.png" out/icon.png
-          tar -cf out/repo.tar repo
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: build
-          path: out/
-          retention-days: 7
+      - name: Install, verify, tamper, repair, offline retry, remove
+        run: tests/test-install.sh out/claude-desktop-*.x86_64.rpm
 
   security:
     name: Security checks
     needs: check
-    if: >-
-      !cancelled() && needs.check.result != 'failure' &&
-      (github.event_name != 'schedule' || needs.check.outputs.changed == 'true')
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -173,210 +153,99 @@ jobs:
           args: -no-color
 
       - name: Shell scripts (shellcheck)
-        run: shellcheck -S warning scripts/host-run scripts/claude-desktop.sh scripts/bridge-launch scripts/apply_extra.sh tests/*.sh
+        run: shellcheck -S warning scripts/claude-desktop-fetch scripts/claude-desktop-verify tools/build-rpm.sh tests/*.sh
 
   publish:
     name: Sign and publish
-    needs: [check, build, security]
+    needs: [check, build, test, security]
     if: >-
-      !cancelled() && needs.build.result == 'success' && needs.security.result == 'success' &&
-      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      !cancelled() && needs.check.outputs.publish == 'true' &&
+      needs.build.result == 'success' && needs.test.result == 'success' && needs.security.result == 'success'
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # push the tested update commit, create the release
-      pages: write           # deploy the Flatpak repository
+      contents: write        # create the release
+      pages: write           # deploy the dnf repository
       id-token: write        # Pages deployment + build provenance
       attestations: write    # build provenance anyone can verify
     environment:
       name: github-pages
-      url: ${{ env.PAGES_URL }}/
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae
-      options: --privileged
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
     steps:
+      - name: Tools
+        run: dnf -y -q install rpm-sign createrepo_c gnupg2 git-core gh jq
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 0
-
-      - name: Use the updated manifest
-        if: needs.check.outputs.changed == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: update
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: build
+          name: rpm
           path: out
 
-      - name: Commit the tested update
-        if: needs.check.outputs.changed == 'true'
+      - name: Sign the RPM and the repository
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST" | head -1)
-          git add "$MANIFEST" "$APP_ID.metainfo.xml"
-          git commit -m "Update Claude Desktop to $VERSION" \
-                     -m "Found, built and tested automatically by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:main
-
-      - name: New app build, or keep the published one?
-        env:
-          NEW_VERSION: ${{ needs.check.outputs.changed }}
-        run: |
-          # A new app commit makes every user download Claude's 180 MB .deb again, so the
-          # app ref only changes for a new Claude version (or a manual run). Script fixes
-          # live in the Bridge extension, which is always published from this build.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          old=$(python3 -c 'import json, sys, urllib.request
-          b = json.load(urllib.request.urlopen(sys.argv[1] + "/BUILDINFO.json", timeout=30))
-          print(b.get("app_source_commit") or b.get("source_commit") or "")' \
-                "$PAGES_URL" 2>/dev/null || true)
-          app_paths=("$MANIFEST" "$APP_ID.metainfo.xml" "$APP_ID.desktop" scripts/apply_extra.sh scripts/claude-desktop.sh)
-          keep=false
-          if [ -n "$old" ] && git cat-file -e "$old^{commit}" 2>/dev/null; then
-            if git diff --quiet "$old" HEAD -- "${app_paths[@]}"; then
-              keep=true
-            elif [ "$NEW_VERSION" != true ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
-              echo "::notice::The app changed but Claude did not: the app update waits for the next Claude release (run the workflow by hand to publish it now)"
-              keep=true
-            fi
-          fi
-          if [ "$keep" = true ]; then
-            pub=$(mktemp)
-            gpg --dearmor < keys/flatpak-repo-public.asc > "$pub"
-            if ! { ostree init --repo=repo --mode=archive-z2 &&
-                   ostree --repo=repo remote add --gpg-import="$pub" live "$PAGES_URL/repo/" &&
-                   ostree --repo=repo pull --mirror live &&
-                   ostree --repo=repo remote delete live; }; then
-              rm -rf repo
-              keep=false
-            fi
-          fi
-          if [ "$keep" = true ]; then
-            mkdir new && tar -xf out/repo.tar -C new
-            ostree --repo=repo pull-local new/repo "runtime/$APP_ID.Bridge/x86_64/master"
-            rm -rf new
-            echo "Keeping the published app $(cat "repo/refs/heads/app/$APP_ID/x86_64/master") from $old; publishing the new Bridge"
-          else
-            echo "Publishing the new app and Bridge"
-            rm -rf repo
-            tar -xf out/repo.tar
-          fi
-          echo "APP_KEPT=$keep" >> "$GITHUB_ENV"
-
-      - name: Sign repository
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
-          GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+          GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+          GPG_KEY_ID: ${{ secrets.RPM_GPG_KEY_ID }}
         run: |
           if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_KEY_ID" ]; then
-            echo "::error::The FLATPAK_GPG_PRIVATE_KEY / FLATPAK_GPG_KEY_ID secrets are not set"
+            echo "::error::The RPM_GPG_PRIVATE_KEY / RPM_GPG_KEY_ID secrets are not set"
             exit 1
           fi
           GNUPGHOME=$(mktemp -d)
           export GNUPGHOME
           trap 'rm -rf "$GNUPGHOME"' EXIT
           printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          flatpak build-update-repo repo --title="Claude Desktop for Linux (unofficial)" \
-            --default-branch=master --prune
-          err=$(mktemp)
-          for ref in $(ostree --repo=repo refs); do
-            if ! ostree --repo=repo gpg-sign --gpg-homedir="$GNUPGHOME" "$ref" "$GPG_KEY_ID" 2>"$err"; then
-              grep -q 'already signed' "$err" || { cat "$err"; exit 1; }
-            fi
-          done
-          rm -f "$err"
-          flatpak build-update-repo repo --gpg-sign="$GPG_KEY_ID" --gpg-homedir="$GNUPGHOME" \
-            --title="Claude Desktop for Linux (unofficial)" --default-branch=master
+          rpm --define "_gpg_name $GPG_KEY_ID" --define "_openpgp_sign_id $GPG_KEY_ID" \
+              --addsign out/*.rpm
+          mkdir -p _site/repo/x86_64
+          cp out/claude-desktop-*.x86_64.rpm _site/repo/x86_64/
+          createrepo_c --general-compress-type=xz _site/repo
+          gpg --batch --yes --local-user "$GPG_KEY_ID" --detach-sign --armor _site/repo/repodata/repomd.xml
 
-      - name: Verify every published ref is signed
+      - name: Check signatures with the published public key
         run: |
-          pub=$(mktemp)
-          v=$(mktemp -d)
-          gpg --dearmor < keys/flatpak-repo-public.asc > "$pub"
-          ostree init --repo="$v" --mode=bare-user-only
-          ostree --repo="$v" remote add --gpg-import="$pub" pub "file://$PWD/repo"
-          refs=$(ostree --repo=repo refs)
-          [ -n "$refs" ]
-          for ref in $refs; do
-            if ostree --repo="$v" pull --commit-metadata-only pub "$ref" >/dev/null 2>&1; then
-              echo "signed with the published key: $ref"
-            else
-              echo "::error::$ref is not signed with the published key"
-              exit 1
-            fi
-          done
-          rm -rf "$v" "$pub"
+          db=$(mktemp -d)
+          rpmkeys --dbpath "$db" --import keys/RPM-GPG-KEY-claude-desktop-rpm.asc
+          for f in out/*.rpm; do rpmkeys --dbpath "$db" --checksig "$f"; done
+          gh=$(mktemp -d)
+          gpg --homedir "$gh" --batch --import keys/RPM-GPG-KEY-claude-desktop-rpm.asc
+          gpg --homedir "$gh" --batch --status-fd 1 --verify _site/repo/repodata/repomd.xml.asc _site/repo/repodata/repomd.xml \
+            | grep -q "VALIDSIG $RPM_KEY_FPR " || { echo "::error::repomd.xml is not signed by $RPM_KEY_FPR"; exit 1; }
 
-      - name: Build Pages content (repo, ref files, build record)
+      - name: Build Pages content (repo file, key, build record)
+        env:
+          RELEASE: ${{ needs.check.outputs.release }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          VERSION=$(grep -oP 'claude-desktop_\K[0-9.]+(?=_amd64\.deb)' "$MANIFEST" | head -1)
-          export VERSION
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          GPGKEY=$(gpg --dearmor < keys/flatpak-repo-public.asc | base64 --wrap=0)
-          mkdir -p _site
-          for f in claude-desktop.flatpakref claude-desktop.flatpakrepo; do
-            sed -e "s|@URL@|$PAGES_URL|g" -e "s|@GPGKEY@|$GPGKEY|g" "site/$f" > "_site/$f"
-          done
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          sed "s|@URL@|$pages|g" site/claude-desktop.repo > _site/claude-desktop.repo
           cp site/index.html _site/
-          cp -r repo _site/repo
-          cp keys/flatpak-repo-public.asc _site/
-          cp out/icon.png _site/icon.png
+          cp keys/RPM-GPG-KEY-claude-desktop-rpm.asc _site/
           touch _site/.nojekyll
-          python3 - <<'PY'
-          import json, os, re, subprocess
-          m = open(os.environ["MANIFEST"]).read()
-          deb = re.search(r"url: (https://downloads\.claude\.ai/\S+\.deb)\s+sha256: (\w+)\s+size: (\d+)", m)
-          ostree = open(f"repo/refs/heads/app/{os.environ['APP_ID']}/x86_64/master").read().strip()
-          assert re.fullmatch(r"[0-9a-f]{64}", ostree), ostree
-          bridge = open(f"repo/refs/heads/runtime/{os.environ['APP_ID']}.Bridge/x86_64/master").read().strip()
-          assert re.fullmatch(r"[0-9a-f]{64}", bridge), bridge
-          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-          kept = os.environ.get("APP_KEPT") == "true"
-          old = {}
-          if kept:
-              import urllib.request
-              old = json.load(urllib.request.urlopen(os.environ["PAGES_URL"] + "/BUILDINFO.json", timeout=30))
-          info = {
-              "app_id": os.environ["APP_ID"],
-              "claude_version": os.environ["VERSION"],
-              "flatpak_commit": ostree,
-              "app_source_commit": (old.get("app_source_commit") or old.get("source_commit")) if kept else head,
-              "built_by": old.get("built_by") if kept else run,
-              "app_kept_from_previous_release": kept,
-              "bridge_commit": bridge,
-              "bridge_source_commit": head,
-              "source_commit": head,
-              "published_by": run,
-              "trigger": os.environ["GITHUB_EVENT_NAME"],
-              "claude_deb": {"url": deb.group(1), "sha256": deb.group(2), "size": int(deb.group(3))},
-              "signing_key_fingerprint": "633C2A74A8C7B2A4F67DAC05F6E3C4A7C815B241",  # gitleaks:allow
-              "human_involved": False,
-          }
-          json.dump(info, open("_site/BUILDINFO.json", "w"), indent=2)
-          print(json.dumps(info, indent=2))
-          PY
-          grep -q "^GPGKey=.\{100,\}" _site/claude-desktop.flatpakref
-          grep -q "^GPGKey=.\{100,\}" _site/claude-desktop.flatpakrepo
-          if grep -l '@[A-Z]*@' _site/*.flatpakref* _site/index.html; then exit 1; fi
-          test -s _site/index.html && test -s _site/icon.png
-          ! find _site -name '*.deb' -o -name '*.asar' | grep .
+          . out/source.conf
+          jq -n --arg v "$VERSION" --argjson r "$RELEASE" --arg url "$DEB_URL" --arg sha "$DEB_SHA256" \
+                --argjson size "$DEB_SIZE" --arg head "$(git rev-parse HEAD)" \
+                --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --arg ev "$GITHUB_EVENT_NAME" --arg fpr "$RPM_KEY_FPR" \
+                --arg rpmsha "$(sha256sum _site/repo/x86_64/*.rpm | cut -d' ' -f1)" \
+             '{claude_version: $v, rpm_release: $r, rpm_sha256: $rpmsha,
+               claude_deb: {url: $url, sha256: $sha, size: $size},
+               source_commit: $head, built_by: $run, trigger: $ev,
+               signing_key_fingerprint: $fpr, anthropic_files_hosted: false, human_involved: false}' \
+             > _site/BUILDINFO.json
+          cat _site/BUILDINFO.json
+          if grep -l '@[A-Z]*@' _site/claude-desktop.repo _site/index.html; then exit 1; fi
+          # The rule this project keeps: no Anthropic software on the site.
+          ! find _site -name '*.deb' -o -name '*.asar' -o -name '*.node' | grep .
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
             _site/BUILDINFO.json
-            _site/claude-desktop.flatpakref
-            _site/claude-desktop.flatpakrepo
+            _site/repo/x86_64/*.rpm
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
@@ -389,28 +258,30 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ needs.check.outputs.release }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Release v$VERSION already exists"
-            exit 0
-          fi
-          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          . out/source.conf
+          tag="v$VERSION-$RELEASE"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "Release $tag exists"; exit 0; fi
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
           {
-            echo "Claude Desktop $VERSION for Linux, as a Flatpak. Found, built, tested, signed and"
-            echo "published automatically by [this workflow run]($RUN) – no human step."
+            echo "Claude Desktop $VERSION for Fedora, as an RPM (package release $RELEASE)."
+            echo "Found, built, install-tested, signed and published by [this workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) – no human step."
             echo
-            echo "Install: \`flatpak install --user $PAGES_URL/claude-desktop.flatpakref\`"
-            echo "Update: \`flatpak update\`"
+            echo "Install:"
+            echo '```sh'
+            echo "sudo dnf config-manager addrepo --from-repofile=$pages/claude-desktop.repo"
+            echo "sudo dnf install claude-desktop"
+            echo '```'
+            echo "Update: \`sudo dnf upgrade\`"
             echo
-            echo "Build record (also on the website as BUILDINFO.json, with a GitHub attestation):"
+            echo "This RPM contains no Anthropic software. On install it downloads Anthropic's official"
+            echo "Linux build from downloads.claude.ai and checks it against the pinned SHA256 below."
             echo '```json'
             cat _site/BUILDINFO.json
             echo '```'
             echo "Verify: \`gh attestation verify BUILDINFO.json -R $GITHUB_REPOSITORY\`"
-            echo
-            echo "The Claude app is downloaded from Anthropic at install time; no Anthropic software is included here."
           } > notes.md
-          gh release create "v$VERSION" _site/claude-desktop.flatpakref _site/BUILDINFO.json \
-            --title "Claude Desktop $VERSION" --notes-file notes.md
-
+          gh release create "$tag" _site/repo/x86_64/*.rpm out/*.src.rpm _site/BUILDINFO.json \
+            --title "Claude Desktop $VERSION-$RELEASE" --notes-file notes.md

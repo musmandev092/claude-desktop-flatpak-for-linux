@@ -1,60 +1,70 @@
-# Claude Desktop for Linux — Flatpak (unofficial)
+# Claude Desktop for Fedora — RPM (unofficial)
 
-**No human involvement — install once, everything works.** One command installs it; no
-setup, no config edits, no root. Every release is found, built, tested, signed and published
-by GitHub Actions with no human step, and reaches you through `flatpak update`.
-
-Anthropic's official Claude Desktop app as a signed Flatpak, built for **Fedora Atomic**
-(Silverblue, Kinoite, Bazzite, Bluefin, Aurora) and any other distro with Flatpak.
+Anthropic's official Claude Desktop for Linux, as a normal **dnf** package for Fedora.
+Install once; updates arrive with `sudo dnf upgrade`.
 
 > **On Ubuntu or Debian, use [Anthropic's official `.deb`](https://code.claude.com/docs/en/desktop-linux) instead.**
-> On Fedora Workstation or Arch a native package works too; this Flatpak is the same everywhere and needs no root.
 
 ## Install
 
 ```sh
-flatpak install --user https://musmandev092.github.io/claude-desktop-flatpak-for-linux/claude-desktop.flatpakref
+sudo dnf config-manager addrepo --from-repofile=https://musmandev092.github.io/claude-desktop-rpm/claude-desktop.repo
+sudo dnf install claude-desktop
 ```
 
-That's it. Updates arrive through `flatpak update`, GNOME Software or KDE Discover.
-
-## What works
-
-- Chat, projects, sign-in
-- **Claude Code** with your real tools (`git`, shell, SSH keys)
-- **MCP plugins** (`npx`, `uvx`, `docker` …) with no config changes
-- **Cowork** — runs in Anthropic's cloud and reaches the folders you connect
-
-## Atomic desktops
-
-Everything runs on your real system, exactly like a normal terminal. On Silverblue, Bazzite
-and friends just tell Claude *"this is an atomic desktop, use a toolbox"* — it runs
-`toolbox create`, `toolbox run …` itself. For MCP plugins, install their tools on the host as
-usual (e.g. `rpm-ostree install nodejs uv`), exactly like the native app.
+dnf asks you to trust the repository key once. Its fingerprint is
+`9A67 6112 64AD 5938 3EFA 3AA1 E0B0 E56D CFAE 37BB`.
 
 ## How it works
 
-- Flatpak downloads the official `.deb` from `downloads.claude.ai` at install time and checks
-  its SHA-256. Nothing from Anthropic is redistributed and Claude runs unmodified.
-- A small bridge links every host command into the sandbox, so Claude Code and plugins use
-  your tools. Plugins stop when Claude quits.
-- The bridge ships as a separate small extension (`io.github.musmandev092.ClaudeDesktop.Bridge`),
-  installed and updated together with the app. Fixes to it are tiny updates; you only download
-  Claude again when Anthropic releases a new version.
-- **No human in the loop:** GitHub Actions checks Anthropic's repository every hour,
-  builds, install-tests, scans, signs and publishes each new version. If anything fails,
+- **No Anthropic software is hosted here.** The `claude-desktop` package is a few hundred KB:
+  our install scripts, plus the exact URL, size and SHA-256 of one official `.deb` and a list
+  of every file in it.
+- When dnf installs or updates the package, it downloads that `.deb` from
+  `downloads.claude.ai`, checks the SHA-256, verifies every file, and puts Claude in place
+  **unmodified** — the same files Ubuntu users get.
+- rpm owns all of Claude's files (`%ghost`), so `sudo dnf remove claude-desktop` removes
+  everything, and `rpm -qf` names the package.
+- Same as the `.deb`, minus two Debian/Ubuntu-only steps: the AppArmor profile (Fedora does
+  not need it) and the apt repository (this dnf repository replaces it).
+- **No human in the loop:** GitHub Actions checks Anthropic's signed apt index every hour,
+  builds the package, install-tests it in a clean Fedora container (real download, tamper
+  check, offline retry, clean removal), scans, signs and publishes. If anything fails,
   nothing is published.
 
-Verify a build: `gh attestation verify BUILDINFO.json -R musmandev092/claude-desktop-flatpak-for-linux`
-(download `BUILDINFO.json` from the site). Signing key fingerprint:
-`633C 2A74 A8C7 B2A4 F67D AC05 F6E3 C4A7 C815 B241`.
+## Commands
+
+| Command | What it does |
+|---|---|
+| `claude-desktop-verify` | Checks every installed file against the package's SHA-256 list |
+| `sudo claude-desktop-fetch` | Downloads and installs the pinned build again (repairs a broken install) |
+
+If the download fails during install (offline), dnf still finishes and a one-time service
+retries at the next boot.
+
+## Verify a build
+
+`gh attestation verify BUILDINFO.json -R musmandev092/claude-desktop-rpm`
+(download `BUILDINFO.json` from the site or a release).
+
+## Moving from the Flatpak
+
+This repository used to publish a Flatpak (`io.github.musmandev092.ClaudeDesktop`); it is
+discontinued. To switch, quit Claude, install the RPM as above, copy your data and remove the
+Flatpak:
+
+```sh
+rsync -a --exclude='Cache/' --exclude='Code Cache/' --exclude='GPUCache/' --exclude='Singleton*' \
+      ~/.var/app/io.github.musmandev092.ClaudeDesktop/config/Claude/ ~/.config/Claude/
+flatpak uninstall --user io.github.musmandev092.ClaudeDesktop io.github.musmandev092.ClaudeDesktop.Bridge
+```
 
 ## Security
 
-Claude Code and plugins can run commands on your host, like the Claude Code CLI does.
-The Flatpak sandbox does not limit what Claude runs. Report issues privately: see [SECURITY.md](SECURITY.md).
+Report issues privately: see [SECURITY.md](SECURITY.md).
 
 ## Disclaimer
 
 Unofficial community project, not affiliated with Anthropic. "Claude" is a trademark of
-Anthropic, PBC. Packaging is [MIT](LICENSE); bundled host-spawn is MIT-0.
+Anthropic, PBC. Packaging is [MIT](LICENSE). Claude Desktop itself is Anthropic's software,
+downloaded from Anthropic under their terms.

@@ -5,11 +5,9 @@
 *.asar
 claude-study/
 
-# ── Flatpak build output (big, generated, rebuildable) ──
-.flatpak-builder/
-build-dir/
-repo/
-*.flatpak
+# ── Build output (generated, rebuildable) ──
+out/
+_site/
 
 # ── Secret keys: NEVER commit ──
 *.gpg
