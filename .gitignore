@@ -1,0 +1,27 @@
+# ── Anthropic's app: NEVER commit (that would be redistribution) ──
+*.deb
+*.rpm
+*.AppImage
+*.asar
+claude-study/
+
+# ── Build output (generated, rebuildable) ──
+out/
+_site/
+
+# ── Secret keys: NEVER commit ──
+*.gpg
+*.key
+private*.asc
+secrets/
+
+# ── Editor and system junk ──
+.vscode/
+.cursor/
+.idea/
+*.swp
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc

@@ -1,0 +1,305 @@
+name: Build
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      rpm_release:
+        description: "RPM release number to build (empty = automatic)"
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RPM_KEY_FPR: "9A67611264AD59383EFA3AA1E0B0E56DCFAE37BB"  # public key fingerprint, gitleaks:allow
+
+jobs:
+  check:
+    name: What to build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Compare Anthropic's newest build with what is published
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          FORCE_RELEASE: ${{ inputs.rpm_release }}
+        run: |
+          # Newest official build, from Anthropic's signed apt index (verified by the script).
+          read -r version sha _ < <(tools/build-rpm.sh --print-latest)
+          echo "Anthropic's newest build: $version ($sha)"
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          pub=$(curl -fsS --max-time 30 "$pages/BUILDINFO.json" 2>/dev/null || echo '{}')
+          pub_version=$(jq -r '.claude_version // ""' <<<"$pub")
+          pub_release=$(jq -r '.rpm_release // 0' <<<"$pub")
+          pub_commit=$(jq -r '.source_commit // ""' <<<"$pub")
+          echo "Published: ${pub_version:-nothing} release $pub_release from ${pub_commit:-?}"
+
+          packaging_changed=true
+          if [ -n "$pub_commit" ] && git cat-file -e "$pub_commit^{commit}" 2>/dev/null &&
+             git diff --quiet "$pub_commit" HEAD -- claude-desktop.spec scripts tools keys LICENSE; then
+            packaging_changed=false
+          fi
+
+          build=true; publish=false; release=1
+          if [ "$version" != "$pub_version" ]; then
+            release=1                                  # new Claude version
+          elif [ "$packaging_changed" = true ] || [ "$EVENT" = workflow_dispatch ]; then
+            release=$((pub_release + 1))               # same Claude, new packaging
+          elif [ "$EVENT" = schedule ] || [ "$EVENT" = push ]; then
+            build=false                                # nothing new
+          fi
+          if [ -n "$FORCE_RELEASE" ]; then
+            [[ "$FORCE_RELEASE" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "::error::rpm_release must be a positive number"; exit 1; }
+            release=$FORCE_RELEASE; build=true
+          fi
+          if [ "$build" = true ] && [ "$EVENT" != pull_request ] && [ "$REF" = refs/heads/main ]; then
+            publish=true
+          fi
+          { echo "build=$build"; echo "publish=$publish"; echo "release=$release"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+          echo "build=$build publish=$publish release=$release"
+
+  build:
+    name: Build the RPM (no Anthropic files inside)
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
+    steps:
+      - name: Build tools
+        run: dnf -y -q install bsdtar rpm-build gnupg2 curl systemd-rpm-macros findutils git-core
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        env:
+          RELEASE: ${{ needs.check.outputs.release }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          tools/build-rpm.sh --outdir out --release "$RELEASE"
+          grep -qx "VERSION=$VERSION" out/source.conf || { echo "::error::built a different version than planned"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rpm
+          path: out/
+          retention-days: 7
+
+  test:
+    name: Install test (real download from Anthropic)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: rpm
+          path: out
+
+      - name: Install, verify, tamper, repair, offline retry, remove
+        run: tests/test-install.sh out/claude-desktop-*.x86_64.rpm
+
+  security:
+    name: Security checks
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: No secrets anywhere in the git history (gitleaks)
+        uses: docker://docker.io/zricethezav/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: "*"
+        with:
+          args: git . --no-banner --redact --exit-code 1
+
+      - name: Workflow security (zizmor, strictest persona)
+        run: pipx run zizmor==1.30.1 --offline --persona=auditor --format=plain .github/workflows/
+
+      - name: Workflow correctness (actionlint)
+        uses: docker://docker.io/rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+        with:
+          args: -no-color
+
+      - name: Shell scripts (shellcheck)
+        run: shellcheck -S warning scripts/claude-desktop-fetch scripts/claude-desktop-verify tools/build-rpm.sh tests/*.sh
+
+  publish:
+    name: Sign and publish
+    needs: [check, build, test, security]
+    if: >-
+      !cancelled() && needs.check.outputs.publish == 'true' &&
+      needs.build.result == 'success' && needs.test.result == 'success' && needs.security.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create the release
+      pages: write           # deploy the dnf repository
+      id-token: write        # Pages deployment + build provenance
+      attestations: write    # build provenance anyone can verify
+    environment:
+      name: github-pages
+    container:
+      image: registry.fedoraproject.org/fedora@sha256:40c267c70cdf6e232ed4dd16d7173bc7b1c30c4ba4a84518263b5bb3ee817367
+    steps:
+      - name: Tools
+        run: dnf -y -q install rpm-sign createrepo_c gnupg2 git-core gh jq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: rpm
+          path: out
+
+      - name: Sign the RPM and the repository
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+          GPG_KEY_ID: ${{ secrets.RPM_GPG_KEY_ID }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_KEY_ID" ]; then
+            echo "::error::The RPM_GPG_PRIVATE_KEY / RPM_GPG_KEY_ID secrets are not set"
+            exit 1
+          fi
+          GNUPGHOME=$(mktemp -d)
+          export GNUPGHOME
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          rpm --define "_gpg_name $GPG_KEY_ID" --define "_openpgp_sign_id $GPG_KEY_ID" \
+              --addsign out/*.rpm
+          mkdir -p _site/repo/x86_64
+          cp out/claude-desktop-*.x86_64.rpm _site/repo/x86_64/
+          createrepo_c --general-compress-type=xz _site/repo
+          gpg --batch --yes --local-user "$GPG_KEY_ID" --detach-sign --armor _site/repo/repodata/repomd.xml
+
+      - name: Check signatures with the published public key
+        run: |
+          db=$(mktemp -d)
+          rpmkeys --dbpath "$db" --import keys/RPM-GPG-KEY-claude-desktop-rpm.asc
+          for f in out/*.rpm; do rpmkeys --dbpath "$db" --checksig "$f"; done
+          gh=$(mktemp -d)
+          gpg --homedir "$gh" --batch --import keys/RPM-GPG-KEY-claude-desktop-rpm.asc
+          gpg --homedir "$gh" --batch --status-fd 1 --verify _site/repo/repodata/repomd.xml.asc _site/repo/repodata/repomd.xml \
+            | grep -q "VALIDSIG $RPM_KEY_FPR " || { echo "::error::repomd.xml is not signed by $RPM_KEY_FPR"; exit 1; }
+
+      - name: Build Pages content (repo file, key, build record)
+        env:
+          RELEASE: ${{ needs.check.outputs.release }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          sed "s|@URL@|$pages|g" site/claude-desktop.repo > _site/claude-desktop.repo
+          cp site/index.html _site/
+          cp keys/RPM-GPG-KEY-claude-desktop-rpm.asc _site/
+          touch _site/.nojekyll
+          . out/source.conf
+          jq -n --arg v "$VERSION" --argjson r "$RELEASE" --arg url "$DEB_URL" --arg sha "$DEB_SHA256" \
+                --argjson size "$DEB_SIZE" --arg head "$(git rev-parse HEAD)" \
+                --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --arg ev "$GITHUB_EVENT_NAME" --arg fpr "$RPM_KEY_FPR" \
+                --arg rpmsha "$(sha256sum _site/repo/x86_64/*.rpm | cut -d' ' -f1)" \
+             '{claude_version: $v, rpm_release: $r, rpm_sha256: $rpmsha,
+               claude_deb: {url: $url, sha256: $sha, size: $size},
+               source_commit: $head, built_by: $run, trigger: $ev,
+               signing_key_fingerprint: $fpr, anthropic_files_hosted: false, human_involved: false}' \
+             > _site/BUILDINFO.json
+          cat _site/BUILDINFO.json
+          if grep -l '@[A-Z]*@' _site/claude-desktop.repo _site/index.html; then exit 1; fi
+          # The rule this project keeps: no Anthropic software on the site.
+          ! find _site -name '*.deb' -o -name '*.asar' -o -name '*.node' | grep .
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            _site/BUILDINFO.json
+            _site/repo/x86_64/*.rpm
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          . out/source.conf
+          # One release per Claude version, named exactly like Anthropic's .deb.
+          # A packaging rebuild of the same version replaces that release's files.
+          tag="v$VERSION"
+          pages="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          {
+            echo "Claude Desktop $VERSION for Fedora, as an RPM."
+            echo "Found, built, install-tested, signed and published by [this workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) – no human step."
+            echo
+            echo "Install:"
+            echo '```sh'
+            echo "sudo dnf config-manager addrepo --from-repofile=$pages/claude-desktop.repo"
+            echo "sudo dnf install claude-desktop"
+            echo '```'
+            echo "Update: \`sudo dnf upgrade\`"
+            echo
+            echo "This RPM contains no Anthropic software. On install it downloads Anthropic's official"
+            echo "Linux build from downloads.claude.ai and checks it against the pinned SHA256 below."
+            echo '```json'
+            cat _site/BUILDINFO.json
+            echo '```'
+            echo "Verify: \`gh attestation verify BUILDINFO.json -R $GITHUB_REPOSITORY\`"
+          } > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            for a in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
+              gh release delete-asset "$tag" "$a" --yes
+            done
+            gh release upload "$tag" _site/repo/x86_64/*.rpm out/*.src.rpm _site/BUILDINFO.json
+            gh release edit "$tag" --title "Claude Desktop $VERSION" --notes-file notes.md
+          else
+            gh release create "$tag" _site/repo/x86_64/*.rpm out/*.src.rpm _site/BUILDINFO.json \
+              --title "Claude Desktop $VERSION" --notes-file notes.md
+          fi
